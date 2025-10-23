@@ -1,0 +1,126 @@
+
+import { Tool } from './types';
+import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, InteractiveEditorPdf, AddWatermarkPdf, GenerateImage, EditImage, AnalyzeImage, GenerateVideo } from './tools';
+import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, PencilSquareIcon, TagIcon, SparklesIcon, PaintBrushIcon, EyeIcon, VideoCameraIcon } from './components/icons';
+
+export const tools: Tool[] = [
+    {
+        id: 'generate-video',
+        title: 'إنشاء فيديو بالذكاء الاصطناعي',
+        description: 'حوّل النص والصور إلى فيديوهات مذهلة باستخدام Veo.',
+        icon: VideoCameraIcon,
+        component: GenerateVideo,
+    },
+    {
+        id: 'generate-image',
+        title: 'إنشاء صور بالذكاء الاصطناعي',
+        description: 'حوّل أفكارك إلى صور فنية مذهلة بوصف نصي.',
+        icon: SparklesIcon,
+        component: GenerateImage,
+    },
+    {
+        id: 'edit-image',
+        title: 'تعديل الصور بالذكاء الاصطناعي',
+        description: 'عدّل صورك بسهولة باستخدام أوامر نصية بسيطة.',
+        icon: PaintBrushIcon,
+        component: EditImage,
+    },
+    {
+        id: 'analyze-image',
+        title: 'تحليل الصور بالذكاء الاصطناعي',
+        description: 'استخرج معلومات ووصفًا تفصيليًا من أي صورة.',
+        icon: EyeIcon,
+        component: AnalyzeImage,
+    },
+    {
+        id: 'editor',
+        title: 'محرر PDF التفاعلي',
+        description: 'أضف نصوصًا وأشكالًا ورسومات مباشرة على ملف PDF الخاص بك.',
+        icon: PencilSquareIcon,
+        component: InteractiveEditorPdf,
+    },
+    {
+        id: 'merge',
+        title: 'دمج PDF',
+        description: 'اجمع عدة ملفات PDF في ملف واحد.',
+        icon: DocumentDuplicateIcon,
+        component: MergePdf,
+    },
+    {
+        id: 'split',
+        title: 'تقسيم PDF',
+        description: 'استخرج كل صفحة من ملف PDF إلى ملف منفصل.',
+        icon: ArrowsRightLeftIcon,
+        component: SplitPdf,
+    },
+    {
+        id: 'compress',
+        title: 'ضغط PDF',
+        description: 'قلل حجم ملف PDF مع الحفاظ على الجودة.',
+        icon: ArchiveBoxArrowDownIcon,
+        component: CompressPdf,
+    },
+    {
+        id: 'rotate',
+        title: 'تدوير PDF',
+        description: 'أدر صفحات ملف PDF الخاص بك.',
+        icon: ArrowPathIcon,
+        component: RotatePdf,
+    },
+     {
+        id: 'image-to-pdf',
+        title: 'صورة إلى PDF',
+        description: 'اجمع عدة صور في ملف PDF واحد.',
+        icon: PhotoIcon,
+        component: ImageToPdf,
+    },
+    {
+        id: 'pdf-to-image',
+        title: 'PDF إلى صورة',
+        description: 'حول كل صفحة PDF إلى صورة منفصلة (JPG/PNG).',
+        icon: RectangleStackIcon,
+        component: PdfToImage,
+    },
+    {
+        id: 'add-page-numbers',
+        title: 'إضافة أرقام الصفحات',
+        description: 'أضف أرقام الصفحات إلى ملف PDF الخاص بك.',
+        icon: ListBulletIcon,
+        component: AddPageNumbersPdf,
+    },
+    {
+        id: 'watermark',
+        title: 'إضافة علامة مائية',
+        description: 'أضف نصًا أو صورة كعلامة مائية لحماية ملفاتك.',
+        icon: TagIcon,
+        component: AddWatermarkPdf,
+    },
+    {
+        id: 'extract-text',
+        title: 'استخراج النص',
+        description: 'استخرج كل النصوص من ملف PDF، مع دعم المسح الضوئي (OCR).',
+        icon: DocumentMinusIcon,
+        component: ExtractText,
+    },
+    {
+        id: 'ocr',
+        title: 'مسح ضوئي للنص (OCR)',
+        description: 'اجعل ملف PDF الممسوح ضوئيًا قابلاً للبحث.',
+        icon: MagnifyingGlassIcon,
+        component: OcrPdf,
+    },
+    {
+        id: 'pdf-to-word',
+        title: 'تحويل PDF إلى Word (AI)',
+        description: 'حول PDF إلى مستند Word منظم باستخدام الذكاء الاصطناعي.',
+        icon: DocumentTextIcon,
+        component: PdfToWord,
+    },
+    {
+        id: 'protect',
+        title: 'حماية PDF',
+        description: 'قم بإخفاء محتوى PDF بشكل دائم.',
+        icon: ShieldCheckIcon,
+        component: ProtectPdf,
+    },
+];
