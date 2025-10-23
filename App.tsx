@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -31,7 +32,9 @@ const App: React.FC = () => {
     };
     
     const navigate = (view: string) => {
-        setSelectedTool(null);
+        if (view !== 'tool') {
+            setSelectedTool(null);
+        }
         setCurrentView(view);
     };
 
@@ -56,4 +59,16 @@ const App: React.FC = () => {
         <div className="min-h-screen bg-slate-900 bg-pan-animation" style={{backgroundImage: "radial-gradient(circle, rgba(147, 51, 234, 0.2) 0%, transparent 40%), radial-gradient(circle, rgba(59, 130, 246, 0.2) 100%, transparent 70%)"}}>
             <div className="flex h-screen">
                 <Sidebar currentView={currentView} navigate={navigate} />
-                <div className="flex-1 flex flex
+                <div className="flex-1 flex flex-col overflow-hidden">
+                    <Header currentView={currentView} selectedTool={selectedTool} />
+                    <main className="flex-1 overflow-y-auto p-8">
+                        {renderContent()}
+                    </main>
+                </div>
+            </div>
+            <Chatbot />
+        </div>
+    );
+};
+
+export default App;
