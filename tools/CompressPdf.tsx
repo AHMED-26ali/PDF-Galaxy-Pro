@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback } from 'react';
 import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -43,7 +42,7 @@ const CompressPdf: React.FC = () => {
         const jpegQuality = qualityMap[compressionLevel];
 
         try {
-            const { PDFDocument, rgb } = PDFLib;
+            const { PDFDocument } = PDFLib;
             const newPdfDoc = await PDFDocument.create();
             
             const arrayBuffer = await file.arrayBuffer();
@@ -54,6 +53,11 @@ const CompressPdf: React.FC = () => {
                 const viewport = page.getViewport({ scale });
                 const canvas = document.createElement('canvas');
                 const context = canvas.getContext('2d');
+                
+                if (!context) {
+                    throw new Error(`Could not create 2D context for page ${i}`);
+                }
+
                 canvas.height = viewport.height;
                 canvas.width = viewport.width;
                 
@@ -63,7 +67,7 @@ const CompressPdf: React.FC = () => {
                 const imageBytes = await fetch(imageDataUrl).then(res => res.arrayBuffer());
                 const image = await newPdfDoc.embedJpg(imageBytes);
 
-                const newPage = newPdfDoc.addPage([page.view[2], page.view[3]]);
+                const newPage = newPdfDoc.addPage([viewport.width / scale, viewport.height / scale]);
                 newPage.drawImage(image, {
                     x: 0,
                     y: 0,
