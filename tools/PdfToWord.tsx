@@ -51,7 +51,7 @@ const PdfToWord: React.FC = () => {
             resetState();
         } catch (e: any) {
             console.error(e);
-            setError(`فشل التحويل: ${e.message || "حدث خطأ غير متوقع."}`);
+            setError(e.message || "فشل التحويل: حدث خطأ غير متوقع.");
             setIsLoading(false);
             setStatus('');
         }
@@ -100,7 +100,7 @@ const PdfToWord: React.FC = () => {
 
         } catch (e: any) {
              console.error(e);
-             setError(`فشلت عملية المسح الضوئي: ${e.message || "حدث خطأ غير متوقع."}`);
+             setError(e.message || "فشلت عملية المسح الضوئي أو التحويل.");
              setIsLoading(false);
              setStatus('');
         }
@@ -135,7 +135,7 @@ const PdfToWord: React.FC = () => {
 
         } catch (e: any) {
             console.error(e);
-            setError(`فشل التحويل: ${e.message || "حدث خطأ غير متوقع."}`);
+            setError(e.message || "فشل التحويل: حدث خطأ غير متوقع.");
             setIsLoading(false);
             setStatus('');
         }

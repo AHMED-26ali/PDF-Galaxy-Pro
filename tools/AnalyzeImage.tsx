@@ -37,7 +37,7 @@ const AnalyzeImage: React.FC = () => {
             setAnalysisResult(result);
         } catch (e: any) {
             console.error(e);
-            setError(`فشل تحليل الصورة: ${e.message || "حدث خطأ غير متوقع."}`);
+            setError(e.message || "فشل تحليل الصورة: حدث خطأ غير متوقع.");
         } finally {
             setIsLoading(false);
         }

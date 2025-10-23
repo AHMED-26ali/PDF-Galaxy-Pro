@@ -24,7 +24,7 @@ const GenerateImage: React.FC = () => {
             setGeneratedImageUrl(imageUrl);
         } catch (e: any) {
             console.error(e);
-            setError(`فشل إنشاء الصورة: ${e.message || "حدث خطأ غير متوقع."}`);
+            setError(e.message || "فشل إنشاء الصورة: حدث خطأ غير متوقع.");
         } finally {
             setIsLoading(false);
         }

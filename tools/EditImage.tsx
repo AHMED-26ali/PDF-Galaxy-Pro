@@ -45,7 +45,7 @@ const EditImage: React.FC = () => {
             setEditedImageUrl(imageUrl);
         } catch (e: any) {
             console.error(e);
-            setError(`فشل تعديل الصورة: ${e.message || "حدث خطأ غير متوقع."}`);
+            setError(e.message || "فشل تعديل الصورة: حدث خطأ غير متوقع.");
         } finally {
             setIsLoading(false);
         }

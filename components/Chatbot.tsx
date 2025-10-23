@@ -37,8 +37,8 @@ const Chatbot: React.FC = () => {
             const responseText = await getChatResponse(userMessage.text);
             const botMessage: Message = { sender: 'bot', text: responseText };
             setMessages(prev => [...prev, botMessage]);
-        } catch (error) {
-            const errorMessage: Message = { sender: 'bot', text: 'عذراً، حدث خطأ أثناء الاتصال بالمساعد. يرجى المحاولة مرة أخرى.' };
+        } catch (error: any) {
+            const errorMessage: Message = { sender: 'bot', text: error.message || 'عذراً، حدث خطأ أثناء الاتصال بالمساعد. يرجى المحاولة مرة أخرى.' };
             setMessages(prev => [...prev, errorMessage]);
         } finally {
             setIsLoading(false);

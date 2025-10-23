@@ -15,7 +15,7 @@ const getAiClient = (): GoogleGenAI => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
         console.error("API_KEY environment variable not set.");
-        throw new Error("API Key for Gemini is not configured. Please set the API_KEY environment variable.");
+        throw new Error("مفتاح API الخاص بـ Gemini غير مُعد. يرجى إعداد متغير البيئة API_KEY في خدمة الاستضافة الخاصة بك (مثل Netlify أو Vercel) ثم إعادة نشر الموقع.");
     }
     
     ai = new GoogleGenAI({ apiKey });
@@ -119,7 +119,10 @@ export const convertTextToHtml = async (text: string): Promise<string> => {
 
     } catch (error) {
         console.error("Error calling Gemini API:", error);
-        throw new Error(`Failed to convert text to HTML using Gemini API. Reason: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error) {
+            throw error;
+        }
+        throw new Error(`Failed to convert text to HTML using Gemini API. Reason: ${String(error)}`);
     }
 };
 
@@ -133,7 +136,10 @@ export const getChatResponse = async (message: string): Promise<string> => {
         return response.text.trim();
     } catch (error) {
         console.error("Error calling Gemini API for chat:", error);
-        throw new Error(`Failed to get a response from the AI assistant. Reason: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof Error) {
+            throw error;
+        }
+        throw new Error(`Failed to get a response from the AI assistant. Reason: ${String(error)}`);
     }
 };
 
