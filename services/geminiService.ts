@@ -1,12 +1,27 @@
 
 import { GoogleGenAI, Modality } from "@google/genai";
 
-// Ensure API_KEY is available in the environment
-const apiKey = process.env.API_KEY;
-if (!apiKey) {
-    console.error("API_KEY environment variable not set.");
-}
-const ai = new GoogleGenAI({ apiKey: apiKey! });
+let ai: GoogleGenAI | null = null;
+
+/**
+ * Initializes and returns the GoogleGenAI instance.
+ * Throws an error if the API key is not available.
+ */
+const getAiClient = (): GoogleGenAI => {
+    if (ai) {
+        return ai;
+    }
+
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+        console.error("API_KEY environment variable not set.");
+        throw new Error("API Key for Gemini is not configured. Please set the API_KEY environment variable.");
+    }
+    
+    ai = new GoogleGenAI({ apiKey });
+    return ai;
+};
+
 
 const fileToBase64 = (file: File): Promise<string> => {
     return new Promise<string>((resolve) => {
@@ -80,11 +95,8 @@ ${content}
 
 
 export const convertTextToHtml = async (text: string): Promise<string> => {
-    if (!apiKey) {
-        throw new Error("API Key for Gemini is not configured.");
-    }
-    
     try {
+        const client = getAiClient();
         const prompt = `
         قم بتنسيق النص التالي إلى HTML أساسي. استخدم علامات دلالية مثل <h1> و <h2> و <p> و <strong> لتنظيم المحتوى.
         لا تقم بتضمين علامات <html> أو <head> أو <body>. يجب أن يكون الإخراج فقط هو المحتوى الذي يوضع داخل وسم <body>.
@@ -92,54 +104,43 @@ export const convertTextToHtml = async (text: string): Promise<string> => {
         النص المراد تنسيقه هو:
         \n\n${text}`;
         
-        const response = await ai.models.generateContent({
+        const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: [{ parts: [{ text: prompt }] }],
             config: {
-                // Set temperature to 0.2 for more deterministic and structured output
                 temperature: 0.2,
             }
         });
 
         let bodyContent = response.text.trim();
-        
-        // Clean up potential markdown code block fences from the response
         bodyContent = bodyContent.replace(/^```html\n?/, '').replace(/\n?```$/, '');
-        
-        // Inject the formatted content into our Word-compatible template
         const fullHtml = createWordHtmlTemplate(bodyContent);
-        
         return fullHtml;
 
     } catch (error) {
         console.error("Error calling Gemini API:", error);
-        throw new Error("Failed to convert text to HTML using Gemini API.");
+        throw new Error(`Failed to convert text to HTML using Gemini API. Reason: ${error instanceof Error ? error.message : String(error)}`);
     }
 };
 
 export const getChatResponse = async (message: string): Promise<string> => {
-    if (!apiKey) {
-        throw new Error("API Key for Gemini is not configured.");
-    }
-
     try {
-        const response = await ai.models.generateContent({
+        const client = getAiClient();
+        const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: [{ parts: [{ text: message }] }],
         });
-
         return response.text.trim();
     } catch (error) {
         console.error("Error calling Gemini API for chat:", error);
-        throw new Error("Failed to get a response from the AI assistant.");
+        throw new Error(`Failed to get a response from the AI assistant. Reason: ${error instanceof Error ? error.message : String(error)}`);
     }
 };
 
 export const analyzeImage = async (prompt: string, imageFile: File): Promise<string> => {
-    if (!apiKey) throw new Error("API Key for Gemini is not configured.");
-    
+    const client = getAiClient();
     const imagePart = await fileToGenerativePart(imageFile);
-    const response = await ai.models.generateContent({
+    const response = await client.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: { parts: [{ text: prompt }, imagePart] },
     });
@@ -147,9 +148,8 @@ export const analyzeImage = async (prompt: string, imageFile: File): Promise<str
 };
 
 export const generateImage = async (prompt: string): Promise<string> => {
-    if (!apiKey) throw new Error("API Key for Gemini is not configured.");
-    
-    const response = await ai.models.generateImages({
+    const client = getAiClient();
+    const response = await client.models.generateImages({
         model: 'imagen-4.0-generate-001',
         prompt: prompt,
         config: {
@@ -163,12 +163,11 @@ export const generateImage = async (prompt: string): Promise<string> => {
 };
 
 export const editImage = async (prompt: string, imageFile: File): Promise<string> => {
-    if (!apiKey) throw new Error("API Key for Gemini is not configured.");
-    
+    const client = getAiClient();
     const imagePart = await fileToGenerativePart(imageFile);
     const textPart = { text: prompt };
 
-    const response = await ai.models.generateContent({
+    const response = await client.models.generateContent({
         model: 'gemini-2.5-flash-image',
         contents: { parts: [imagePart, textPart] },
         config: {
