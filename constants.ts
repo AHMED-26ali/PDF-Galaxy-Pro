@@ -1,16 +1,9 @@
 
 import { Tool } from './types';
-import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, InteractiveEditorPdf, AddWatermarkPdf, GenerateImage, EditImage, AnalyzeImage, GenerateVideo } from './tools';
-import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, PencilSquareIcon, TagIcon, SparklesIcon, PaintBrushIcon, EyeIcon, VideoCameraIcon } from './components/icons';
+import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, InteractiveEditorPdf, AddWatermarkPdf, GenerateImage, EditImage, AnalyzeImage } from './tools';
+import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, PencilSquareIcon, TagIcon, SparklesIcon, PaintBrushIcon, EyeIcon } from './components/icons';
 
 export const tools: Tool[] = [
-    {
-        id: 'generate-video',
-        title: 'إنشاء فيديو بالذكاء الاصطناعي',
-        description: 'حوّل النص والصور إلى فيديوهات مذهلة باستخدام Veo.',
-        icon: VideoCameraIcon,
-        component: GenerateVideo,
-    },
     {
         id: 'generate-image',
         title: 'إنشاء صور بالذكاء الاصطناعي',

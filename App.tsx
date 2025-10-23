@@ -1,9 +1,9 @@
 
+
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import ToolsView from './views/ToolsView';
-import Dashboard from './views/Dashboard';
 import ToolWrapper from './views/ToolWrapper';
 import Chatbot from './components/Chatbot';
 import { Tool } from './types';
@@ -46,13 +46,7 @@ const App: React.FC = () => {
                 </ToolWrapper>
             );
         }
-        switch (currentView) {
-            case 'dashboard':
-                return <Dashboard />;
-            case 'tools':
-            default:
-                return <ToolsView tools={tools} onSelectTool={handleSelectTool} />;
-        }
+        return <ToolsView tools={tools} onSelectTool={handleSelectTool} />;
     };
     
     return (

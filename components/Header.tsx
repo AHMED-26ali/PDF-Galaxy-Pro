@@ -1,4 +1,5 @@
 
+
 import React from 'react';
 import { MagnifyingGlassIcon } from './icons';
 import { Tool } from '../types';
@@ -14,11 +15,7 @@ const Header: React.FC<HeaderProps> = ({ currentView, selectedTool }) => {
         if (currentView === 'tool' && selectedTool) {
             return selectedTool.title;
         }
-        switch(currentView) {
-            case 'dashboard': return 'لوحة التحكم';
-            case 'tools': return 'أدوات PDF';
-            default: return 'PDF Galaxy Pro';
-        }
+        return 'أدوات PDF';
     };
 
     return (

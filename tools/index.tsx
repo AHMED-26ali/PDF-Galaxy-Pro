@@ -15,4 +15,3 @@ export { default as AddWatermarkPdf } from './AddWatermarkPdf';
 export { default as GenerateImage } from './GenerateImage';
 export { default as EditImage } from './EditImage';
 export { default as AnalyzeImage } from './AnalyzeImage';
-export { default as GenerateVideo } from './GenerateVideo';
