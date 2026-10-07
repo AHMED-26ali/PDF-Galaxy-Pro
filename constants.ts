@@ -1,6 +1,6 @@
 import { Tool } from './types';
-import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, AddWatermarkPdf } from './tools';
-import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, TagIcon } from './components/icons';
+import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, AddWatermarkPdf, QrCodeGenerator } from './tools';
+import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, TagIcon, QrCodeIcon } from './components/icons';
 
 export const tools: Tool[] = [
     {
@@ -128,5 +128,16 @@ export const tools: Tool[] = [
         categoryLabel: 'قراءة واستخراج',
         colorTheme: 'amber',
         badge: 'دعم العربية'
+    },
+    {
+        id: 'qr-generator',
+        title: 'إنشاء كيو آر كود (QR Code)',
+        description: 'أنشئ باركود QR مخصص للروابط والواي فاي والواتساب، مع خيار دمجه في مستندات PDF أو طباعته.',
+        icon: QrCodeIcon,
+        component: QrCodeGenerator,
+        category: 'convert',
+        categoryLabel: 'إنشاء ورموز',
+        colorTheme: 'violet',
+        badge: 'جديد ومميز'
     },
 ];

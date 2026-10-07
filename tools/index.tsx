@@ -11,3 +11,5 @@ export { default as PdfToImage } from './PdfToImage';
 export { default as ExtractText } from './ExtractText';
 export { default as InteractiveEditorPdf } from './InteractiveEditorPdf';
 export { default as AddWatermarkPdf } from './AddWatermarkPdf';
+export { default as SejdaPdfEditor } from './SejdaPdfEditor';
+export { default as QrCodeGenerator } from './QrCodeGenerator';
