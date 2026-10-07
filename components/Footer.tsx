@@ -6,8 +6,12 @@ const Footer: React.FC = () => {
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="flex flex-col md:flex-row items-center justify-between gap-6 pb-8 border-b border-slate-100">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-md shadow-blue-500/20">
-                            PDF
+                        <div className="w-10 h-10 rounded-xl overflow-hidden shadow-md shadow-blue-500/20 border border-slate-200 bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center p-0.5">
+                            <img 
+                                src="/logo.svg" 
+                                alt="PDF Galaxy Pro Logo" 
+                                className="w-full h-full object-contain rounded-lg"
+                            />
                         </div>
                         <div>
                             <span className="text-lg font-black text-slate-900">PDF Galaxy Pro</span>
