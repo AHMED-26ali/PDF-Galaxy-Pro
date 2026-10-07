@@ -210,7 +210,7 @@ const MergePdf: React.FC = () => {
                 {pages.map((page, index) => (
                     <div 
                         key={page.id}
-                        className="relative group bg-slate-800 rounded-md p-1.5 cursor-grab active:cursor-grabbing border-2 border-transparent hover:border-blue-500 transition-all flex flex-col items-center"
+                        className="relative group bg-slate-50 rounded-2xl p-2 cursor-grab active:cursor-grabbing border-2 border-slate-200 hover:border-blue-500 transition-all flex flex-col items-center shadow-xs"
                         draggable
                         onDragStart={() => dragItem.current = index}
                         onDragEnter={() => dragOverItem.current = index}
@@ -218,21 +218,21 @@ const MergePdf: React.FC = () => {
                         onDragOver={(e) => e.preventDefault()}
                     >
                         <div className="relative w-full">
-                            <img src={page.thumbnailUrl} alt={`Page preview`} className="w-full h-auto rounded-sm" />
-                            <div className="absolute top-1 right-1 bg-slate-900/80 text-white text-xs font-bold px-1.5 py-0.5 rounded-sm">
+                            <img src={page.thumbnailUrl} alt={`Page preview`} className="w-full h-auto rounded-xl shadow-xs" />
+                            <div className="absolute top-1.5 right-1.5 bg-blue-600 text-white text-xs font-bold px-2 py-0.5 rounded-lg shadow-sm">
                                 {index + 1}
                             </div>
                             <button
                                 draggable="false"
                                 onClick={() => handleRemovePage(page.id)} 
-                                className="absolute top-1 left-1 p-1 rounded-full bg-red-600/80 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
+                                className="absolute top-1.5 left-1.5 p-1 rounded-full bg-red-600 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700 shadow-sm"
                                 aria-label={`Remove page`}
                             >
                                 <XMarkIcon className="w-4 h-4" />
                             </button>
                         </div>
-                        <div className="text-xs text-slate-400 mt-1.5 text-center truncate w-full" title={`${page.sourceFileName} (p${page.sourcePageIndex + 1})`}>
-                            {page.sourceFileName} <span className="text-slate-500">(p{page.sourcePageIndex + 1})</span>
+                        <div className="text-xs text-slate-600 mt-2 text-center truncate w-full font-medium" title={`${page.sourceFileName} (p${page.sourcePageIndex + 1})`}>
+                            {page.sourceFileName} <span className="text-slate-400 font-normal">(p{page.sourcePageIndex + 1})</span>
                         </div>
                     </div>
                 ))}
@@ -241,10 +241,10 @@ const MergePdf: React.FC = () => {
             <div className="mt-6 mb-8">
                 <button
                     onClick={handleAddMoreClick}
-                    className="flex items-center justify-center w-full py-4 border-2 border-dashed border-slate-600 rounded-md text-slate-400 hover:bg-slate-700/50 hover:border-blue-500 transition-colors"
+                    className="flex items-center justify-center w-full py-4 border-2 border-dashed border-blue-200 rounded-2xl text-blue-600 font-bold bg-blue-50/40 hover:bg-blue-50 hover:border-blue-400 transition-all shadow-xs"
                 >
-                    <PlusIcon className="w-6 h-6 mr-2" />
-                    <span>إضافة المزيد من الملفات</span>
+                    <PlusIcon className="w-5 h-5 ml-2" />
+                    <span>إضافة المزيد من ملفات PDF</span>
                 </button>
                 <input
                     ref={fileInputRef}
@@ -256,19 +256,19 @@ const MergePdf: React.FC = () => {
                 />
             </div>
 
-            <div className="text-center p-4 pt-6 border-t border-slate-800 sticky bottom-0 bg-slate-900/50 backdrop-blur-sm -mx-8 -mb-8 px-8 pb-8 rounded-b-xl">
-                 {error && <p className="text-red-500 mb-4 text-center">{error}</p>}
+            <div className="text-center p-4 pt-6 border-t border-slate-100 sticky bottom-0 bg-white/95 backdrop-blur-sm -mx-6 -mb-6 sm:-mx-10 sm:-mb-10 px-6 sm:px-10 pb-6 rounded-b-3xl">
+                 {error && <p className="text-red-600 mb-4 text-center bg-red-50 p-2.5 rounded-xl border border-red-200 font-medium">{error}</p>}
                 <button 
                     onClick={handleMerge}
                     disabled={isLoading || pages.length < 1}
-                    className="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center justify-center mx-auto"
+                    className="bg-blue-600 text-white font-bold py-3.5 px-10 rounded-2xl hover:bg-blue-700 shadow-md shadow-blue-500/25 disabled:bg-slate-300 disabled:cursor-not-allowed transition-all flex items-center justify-center mx-auto text-base"
                 >
                     {isLoading ? 
                         <>
                            <LoadingSpinner/>
                            <span className="mr-3">{loadingMessage || 'جاري الدمج...'}</span>
                         </>
-                        : `دمج ${pages.length} صفحات`
+                        : `دمج وتحميل ${pages.length} صفحات الآن`
                     }
                 </button>
             </div>

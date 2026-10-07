@@ -1,12 +1,55 @@
-
 import React, { useState, useCallback } from 'react';
 import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { convertTextToHtml } from '../services/geminiService';
 
 declare const pdfjsLib: any;
 declare const download: any;
 declare const Tesseract: any;
+
+const createWordDocument = (text: string): string => {
+    const paragraphs = text
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(line => `<p>${line}</p>`)
+        .join('\n');
+
+    return `
+<html xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<meta name=ProgId content=Word.Document>
+<meta name=Generator content="PDF Galaxy Pro">
+<title>Converted Document</title>
+<style>
+<!--
+@page WordSection1 {
+    size: 8.5in 11.0in;
+    margin: 1.0in;
+}
+div.WordSection1 {
+    page: WordSection1;
+}
+body {
+    direction: rtl;
+    font-family: "Arial", sans-serif;
+    font-size: 12pt;
+}
+p {
+    margin: 0 0 10pt 0;
+    line-height: 1.6;
+}
+-->
+</style>
+</head>
+<body lang="AR-SA">
+<div class="WordSection1">
+${paragraphs}
+</div>
+</body>
+</html>
+`;
+};
 
 const PdfToWord: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
@@ -41,11 +84,10 @@ const PdfToWord: React.FC = () => {
                 return;
             }
 
-            setStatus("جاري إرسال النص إلى الذكاء الاصطناعي للتنسيق...");
-            setOcrProgress(0); // Hide progress bar
-            const htmlContent = await convertTextToHtml(text);
-
             setStatus("جاري إنشاء مستند Word...");
+            setOcrProgress(0); // Hide progress bar
+            const htmlContent = createWordDocument(text);
+
             const blob = new Blob([htmlContent], { type: 'application/msword;charset=utf-8' });
             download(blob, `${file!.name.replace('.pdf', '')}.doc`, 'application/msword');
             resetState();
@@ -159,33 +201,31 @@ const PdfToWord: React.FC = () => {
         
         if (needsOcr) {
             return (
-                <div className="text-center p-6 bg-blue-900/20 border border-blue-700 rounded-lg">
-                    <h3 className="text-xl font-bold text-blue-300 mb-3">لم يتم العثور على نص</h3>
-                    <p className="text-slate-300 mb-6 max-w-lg mx-auto">
-                        يبدو أن ملف PDF هذا عبارة عن صورة ممسوحة ضوئيًا. هل ترغب في استخدام تقنية التعرف الضوئي على الحروف (OCR) لاستخراج النص؟
-                        <br/>
-                        <span className="text-sm text-slate-400">(قد تستغرق هذه العملية بضع دقائق.)</span>
+                <div className="text-center p-8 bg-blue-50/70 border border-blue-200 rounded-3xl">
+                    <h3 className="text-xl font-bold text-blue-900 mb-3">لم يتم العثور على نصوص عادية</h3>
+                    <p className="text-slate-600 mb-6 max-w-lg mx-auto leading-relaxed text-sm">
+                        يبدو أن ملف PDF هذا عبارة عن صورة ممسوحة ضوئيًا. هل ترغب في استخدام تقنية التعرف الضوئي على الحروف (OCR) لاستخراج النص وتحويله؟
                     </p>
                     <div className="flex justify-center gap-4">
-                         <button onClick={resetState} className="bg-slate-700 text-white font-bold py-2 px-6 rounded-lg hover:bg-slate-600 transition-colors">إلغاء</button>
-                        <button onClick={runOcrAndConvert} className="bg-blue-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors">بدء المسح الضوئي والتحويل</button>
+                         <button onClick={resetState} className="bg-white text-slate-700 font-bold py-2.5 px-6 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors">إلغاء</button>
+                        <button onClick={runOcrAndConvert} className="bg-blue-600 text-white font-bold py-2.5 px-8 rounded-xl hover:bg-blue-700 shadow-md shadow-blue-500/20 transition-colors">بدء المسح الضوئي والتحويل</button>
                     </div>
                 </div>
             )
         }
 
         return (
-            <>
-                <p className="text-xl mb-6">الملف جاهز للتحويل: <span className="font-bold text-blue-400">{file!.name}</span></p>
-                <div className="text-center p-4 border-t border-slate-800">
+            <div className="space-y-6">
+                <p className="text-lg font-bold text-slate-800">الملف جاهز للتحويل: <span className="text-blue-600 underline">{file!.name}</span></p>
+                <div className="text-center pt-4 border-t border-slate-100">
                     <button 
                         onClick={handleInitialCheck}
-                        className="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors"
+                        className="bg-blue-600 text-white font-bold py-3.5 px-10 rounded-2xl hover:bg-blue-700 shadow-lg shadow-blue-500/25 transition-all text-base"
                     >
-                        تحويل إلى Word
+                        تحويل وتحميل مستند Word الآن
                     </button>
                 </div>
-            </>
+            </div>
         )
     };
 
@@ -198,7 +238,7 @@ const PdfToWord: React.FC = () => {
                     {renderContent()}
                 </div>
             )}
-            {error && <p className="text-red-500 mt-4 text-center p-4 bg-red-900/20 rounded-lg">{error}</p>}
+            {error && <p className="text-red-600 mt-4 text-center p-3 bg-red-50 border border-red-200 rounded-xl font-medium">{error}</p>}
         </div>
     );
 };

@@ -1,12 +1,9 @@
-
-
 import React, { useState, useEffect } from 'react';
-import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import Footer from './components/Footer';
 import ToolsView from './views/ToolsView';
 import ToolWrapper from './views/ToolWrapper';
-import Chatbot from './components/Chatbot';
-import { Tool } from './types';
+import { Tool, ToolCategory } from './types';
 import { tools } from './constants';
 
 declare const pdfjsLib: any;
@@ -14,6 +11,7 @@ declare const pdfjsLib: any;
 const App: React.FC = () => {
     const [currentView, setCurrentView] = useState<string>('tools');
     const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
+    const [selectedCategory, setSelectedCategory] = useState<ToolCategory>('all');
 
     useEffect(() => {
         if (typeof pdfjsLib !== 'undefined') {
@@ -24,18 +22,24 @@ const App: React.FC = () => {
     const handleSelectTool = (tool: Tool) => {
         setSelectedTool(tool);
         setCurrentView('tool');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     const handleBackToTools = () => {
         setSelectedTool(null);
         setCurrentView('tools');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     };
     
-    const navigate = (view: string) => {
+    const handleNavigate = (view: string, category?: ToolCategory) => {
         if (view !== 'tool') {
             setSelectedTool(null);
         }
+        if (category) {
+            setSelectedCategory(category);
+        }
         setCurrentView(view);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     const renderContent = () => {
@@ -46,21 +50,32 @@ const App: React.FC = () => {
                 </ToolWrapper>
             );
         }
-        return <ToolsView tools={tools} onSelectTool={handleSelectTool} />;
+        return (
+            <ToolsView 
+                key={selectedCategory}
+                tools={tools} 
+                initialCategory={selectedCategory} 
+                onSelectTool={handleSelectTool} 
+            />
+        );
     };
     
     return (
-        <div className="min-h-screen bg-slate-900 bg-pan-animation" style={{backgroundImage: "radial-gradient(circle, rgba(147, 51, 234, 0.2) 0%, transparent 40%), radial-gradient(circle, rgba(59, 130, 246, 0.2) 100%, transparent 70%)"}}>
-            <div className="flex h-screen">
-                <Sidebar currentView={currentView} navigate={navigate} />
-                <div className="flex-1 flex flex-col overflow-hidden">
-                    <Header currentView={currentView} selectedTool={selectedTool} />
-                    <main className="flex-1 overflow-y-auto p-8">
-                        {renderContent()}
-                    </main>
-                </div>
-            </div>
-            <Chatbot />
+        <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+            {/* Top Navigation Bar (راس للموقع) */}
+            <Header 
+                currentView={currentView} 
+                selectedTool={selectedTool} 
+                onNavigate={handleNavigate} 
+            />
+
+            {/* Main Content Viewport */}
+            <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
+                {renderContent()}
+            </main>
+
+            {/* Footer */}
+            <Footer />
         </div>
     );
 };

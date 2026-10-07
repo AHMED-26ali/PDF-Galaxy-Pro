@@ -1,4 +1,3 @@
-
 import React, { useState, DragEvent, ChangeEvent, useRef } from 'react';
 import { ArrowUpTrayIcon } from './icons';
 
@@ -50,11 +49,13 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFilesSelected, multiple =
         fileInputRef.current?.click();
     };
 
-    const dragClass = isDragging ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 hover:border-blue-600';
+    const dragClass = isDragging 
+        ? 'border-blue-500 bg-blue-100/60 scale-[1.01]' 
+        : 'border-blue-200 hover:border-blue-500 bg-blue-50/30 hover:bg-blue-50/70';
 
     return (
         <div 
-            className={`w-full p-10 border-2 border-dashed rounded-lg text-center transition-all duration-300 cursor-pointer ${dragClass}`}
+            className={`w-full p-10 sm:p-14 border-2 border-dashed rounded-3xl text-center transition-all duration-200 cursor-pointer ${dragClass} group`}
             onDragEnter={handleDragEnter}
             onDragLeave={handleDragLeave}
             onDragOver={handleDragOver}
@@ -70,10 +71,20 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFilesSelected, multiple =
                 onChange={handleFileChange}
             />
             <div className="flex flex-col items-center">
-                <ArrowUpTrayIcon className="w-16 h-16 text-slate-500 mb-4"/>
-                <p className="text-xl font-semibold text-white">اسحب وأفلت الملفات هنا</p>
-                <p className="text-slate-400 mt-2">أو انقر للاختيار من جهازك</p>
-                {multiple && <p className="text-sm text-slate-500 mt-1">(يمكنك تحديد ملفات متعددة)</p>}
+                <div className="w-18 h-18 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white mb-5 shadow-lg shadow-blue-500/25 group-hover:scale-110 transition-transform duration-200">
+                    <ArrowUpTrayIcon className="w-9 h-9"/>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-slate-800 mb-2">
+                    اسحب وأفلت الملفات هنا
+                </h3>
+                <p className="text-sm sm:text-base text-slate-500 mb-4 font-medium">
+                    أو <span className="text-blue-600 font-bold underline underline-offset-4">اختر الملفات من جهازك</span>
+                </p>
+                <div className="inline-flex items-center gap-2 text-xs text-blue-700 bg-blue-100/80 px-3.5 py-1.5 rounded-full font-bold">
+                    <span>الصيغ المقبولة:</span>
+                    <span className="font-mono">{accept}</span>
+                    {multiple && <span>· يدعم تحديد عدة ملفات</span>}
+                </div>
             </div>
         </div>
     );
