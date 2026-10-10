@@ -49,22 +49,24 @@ export const tools: Tool[] = [
     {
         id: 'image-to-pdf',
         title: 'تحويل الصور إلى PDF',
-        description: 'اجمع مجموعة صور بتنسيق JPG أو PNG وحوّلها إلى ملف PDF عالي الدقة.',
+        description: 'اجمع صورك وحولها لمستندات PDF مع خيارات تحميل مدمجة في ملف واحد، أو مفردة، أو أرشيف ZIP.',
         icon: PhotoIcon,
         component: ImageToPdf,
         category: 'convert',
         categoryLabel: 'تحويل وتصدير',
         colorTheme: 'indigo',
+        badge: 'مدمج، مفرد، أو ZIP'
     },
     {
         id: 'pdf-to-image',
         title: 'تحويل PDF إلى صور',
-        description: 'استخرج كل صفحة من ملف PDF كصورة منفصلة بجودة فائقة.',
+        description: 'استخرج صفحات PDF كصور فائقة الدقة (PNG/JPG/WebP) مع تنزيل مدمج، أو مفرد لكل صفحة، أو أرشيف ZIP.',
         icon: RectangleStackIcon,
         component: PdfToImage,
         category: 'convert',
         categoryLabel: 'تحويل وتصدير',
         colorTheme: 'indigo',
+        badge: 'مفرد أو مدمج أو ZIP'
     },
     {
         id: 'pdf-to-word',
