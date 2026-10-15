@@ -1,0 +1,8 @@
+# Robots.txt for PDF Galaxy Pro
+# https://pdf-galaxy-pro.vercel.app/
+
+User-agent: *
+Allow: /
+
+# Sitemaps
+Sitemap: https://pdf-galaxy-pro.vercel.app/sitemap.xml
