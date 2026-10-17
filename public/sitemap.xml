@@ -1,117 +1,114 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
-        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9
-        http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 
-    <!-- Homepage & Main Hub -->
+    <!-- الصفحة الرئيسية - PDF Galaxy Pro -->
     <url>
         <loc>https://pdf-galaxy-pro.vercel.app/</loc>
-        <lastmod>2026-10-14</lastmod>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>daily</changefreq>
         <priority>1.0</priority>
     </url>
 
-    <!-- 1. Merge PDF Tool -->
+    <!-- 1. أداة دمج PDF -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#merge</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=merge</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.9</priority>
     </url>
 
-    <!-- 2. Split PDF Tool -->
+    <!-- 2. أداة تقسيم PDF -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#split</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=split</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.9</priority>
     </url>
 
-    <!-- 3. Compress PDF Tool -->
+    <!-- 3. أداة ضغط PDF -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#compress</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=compress</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.9</priority>
     </url>
 
-    <!-- 4. Rotate PDF Tool -->
+    <!-- 4. أداة تدوير PDF -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#rotate</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=rotate</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.8</priority>
     </url>
 
-    <!-- 5. Image to PDF Tool -->
+    <!-- 5. أداة تحويل الصور إلى PDF -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#image-to-pdf</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=image-to-pdf</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.9</priority>
     </url>
 
-    <!-- 6. PDF to Image Tool -->
+    <!-- 6. أداة تحويل PDF إلى صور -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#pdf-to-image</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=pdf-to-image</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.9</priority>
     </url>
 
-    <!-- 7. PDF to Word Tool -->
+    <!-- 7. أداة تحويل PDF إلى Word -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#pdf-to-word</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=pdf-to-word</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.9</priority>
     </url>
 
-    <!-- 8. Add Page Numbers Tool -->
+    <!-- 8. أداة ترقيم الصفحات -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#add-page-numbers</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=add-page-numbers</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>monthly</changefreq>
         <priority>0.8</priority>
     </url>
 
-    <!-- 9. Watermark Tool -->
+    <!-- 9. أداة العلامة المائية -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#watermark</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=watermark</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>monthly</changefreq>
         <priority>0.8</priority>
     </url>
 
-    <!-- 10. Protect & Redact PDF Tool -->
+    <!-- 10. أداة حماية وتعتيم PDF -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#protect</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=protect</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>monthly</changefreq>
         <priority>0.8</priority>
     </url>
 
-    <!-- 11. Extract Text Tool -->
+    <!-- 11. أداة استخراج النصوص -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#extract-text</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=extract-text</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.8</priority>
     </url>
 
-    <!-- 12. OCR Tool -->
+    <!-- 12. أداة التعرف الضوئي OCR -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#ocr</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=ocr</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.9</priority>
     </url>
 
-    <!-- 13. QR Code Generator Tool -->
+    <!-- 13. أداة إنشاء كيو آر كود QR Code -->
     <url>
-        <loc>https://pdf-galaxy-pro.vercel.app/#qr-generator</loc>
-        <lastmod>2026-10-14</lastmod>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=qr-generator</loc>
+        <lastmod>2026-10-17</lastmod>
         <changefreq>weekly</changefreq>
         <priority>0.8</priority>
     </url>

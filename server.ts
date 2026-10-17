@@ -285,6 +285,25 @@ app.use(
   })
 );
 
+// SEO and Search Console crawler endpoints
+app.get('/sitemap.xml', (req, res) => {
+  const filePath = fs.existsSync(path.resolve(__dirname, 'dist', 'sitemap.xml'))
+    ? path.resolve(__dirname, 'dist', 'sitemap.xml')
+    : path.resolve(__dirname, 'public', 'sitemap.xml');
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.setHeader('X-Robots-Tag', 'all');
+  res.sendFile(filePath);
+});
+
+app.get('/robots.txt', (req, res) => {
+  const filePath = fs.existsSync(path.resolve(__dirname, 'dist', 'robots.txt'))
+    ? path.resolve(__dirname, 'dist', 'robots.txt')
+    : path.resolve(__dirname, 'public', 'robots.txt');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('X-Robots-Tag', 'all');
+  res.sendFile(filePath);
+});
+
 async function startServer() {
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.resolve(__dirname, 'dist')));

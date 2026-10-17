@@ -19,21 +19,60 @@ const App: React.FC = () => {
         }
     }, []);
 
+    // Synchronize selected tool with URL query parameter or hash
+    useEffect(() => {
+        const updateFromUrl = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const toolFromQuery = urlParams.get('tool');
+            const hash = window.location.hash.replace('#', '').trim();
+            const targetToolId = toolFromQuery || hash;
+
+            if (targetToolId) {
+                const found = tools.find(t => t.id === targetToolId);
+                if (found) {
+                    setSelectedTool(found);
+                    setCurrentView('tool');
+                    document.title = `${found.title} - PDF Galaxy Pro`;
+                    return;
+                }
+            }
+            setSelectedTool(null);
+            setCurrentView('tools');
+            document.title = 'PDF Galaxy Pro - محرر وأدوات PDF الاحترافية';
+        };
+
+        updateFromUrl();
+        window.addEventListener('popstate', updateFromUrl);
+        return () => window.removeEventListener('popstate', updateFromUrl);
+    }, []);
+
     const handleSelectTool = (tool: Tool) => {
         setSelectedTool(tool);
         setCurrentView('tool');
+        const url = new URL(window.location.href);
+        url.searchParams.set('tool', tool.id);
+        window.history.pushState(null, '', url.pathname + url.search);
+        document.title = `${tool.title} - PDF Galaxy Pro`;
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     const handleBackToTools = () => {
         setSelectedTool(null);
         setCurrentView('tools');
+        const url = new URL(window.location.href);
+        url.searchParams.delete('tool');
+        window.history.pushState(null, '', url.pathname);
+        document.title = 'PDF Galaxy Pro - محرر وأدوات PDF الاحترافية';
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
     
     const handleNavigate = (view: string, category?: ToolCategory) => {
         if (view !== 'tool') {
             setSelectedTool(null);
+            const url = new URL(window.location.href);
+            url.searchParams.delete('tool');
+            window.history.pushState(null, '', url.pathname);
+            document.title = 'PDF Galaxy Pro - محرر وأدوات PDF الاحترافية';
         }
         if (category) {
             setSelectedCategory(category);
