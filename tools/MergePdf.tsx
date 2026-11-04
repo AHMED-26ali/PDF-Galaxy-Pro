@@ -114,7 +114,7 @@ const MergePdf: React.FC = () => {
             const loadedDocs = new Map<string, any>();
             
             // Pre-load all necessary source PDFs into pdf-lib documents
-            const uniqueFileNames = Array.from(new Set(pages.map(p => p.sourceFileName)));
+            const uniqueFileNames: string[] = Array.from(new Set<string>(pages.map(p => p.sourceFileName)));
             for (const fileName of uniqueFileNames) {
                 const file = sourceFiles.current.get(fileName);
                 if (file) {
@@ -178,7 +178,7 @@ const MergePdf: React.FC = () => {
     };
     
     const handleAddMoreFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(e.target.files || []);
+        const files: File[] = e.target.files ? Array.from(e.target.files) : [];
         if (files.length > 0) {
             onFilesSelected(files);
         }

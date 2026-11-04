@@ -46,9 +46,9 @@ const PdfToWord: React.FC = () => {
 
     // Create a genuine .docx document using docx library
     const generateDocx = async (text: string, paragraphsList?: ExtractedParagraph[]): Promise<Blob> => {
-        const rawLines = paragraphsList && paragraphsList.length > 0 
+        const rawLines: ExtractedParagraph[] = paragraphsList && paragraphsList.length > 0 
             ? paragraphsList 
-            : text.split(/\r?\n\r?\n/).map(p => ({ text: p.trim() })).filter(p => p.text.length > 0);
+            : text.split(/\r?\n\r?\n/).map(p => ({ text: p.trim(), isHeading: false })).filter(p => p.text.length > 0);
 
         const docxChildren: Paragraph[] = [];
 

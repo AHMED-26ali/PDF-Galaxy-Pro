@@ -100,7 +100,7 @@ const InteractiveEditorPdf: React.FC = () => {
     // Current page blocks
     const currentBlocks = pageBlocks[currentPageIndex] || [];
     const activeBlock = currentBlocks.find(b => b.id === activeBlockId) || null;
-    const totalModifications = Object.values(pageBlocks).flat().filter(b => b.isModified).length;
+    const totalModifications = (Object.values(pageBlocks) as TextBlock[][]).flat().filter((b: TextBlock) => b.isModified).length;
 
     // Load PDF Document and generate thumbnails
     const handleLoadPdf = useCallback(async (selectedFile: File) => {
