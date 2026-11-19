@@ -208,7 +208,7 @@ app.get('/img/:id', (req, res) => {
 
       <!-- Footer -->
       <footer class="p-3 text-center text-xs text-slate-500 border-t border-slate-800/60">
-        تمت المشاركة والمسح عبر منصة <span class="font-bold text-slate-400">مدار PDF</span>
+        تمت المشاركة والمسح عبر منصة <span class="font-bold text-slate-400">PDFix</span>
       </footer>
     </body>
     </html>
