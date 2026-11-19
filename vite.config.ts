@@ -36,6 +36,15 @@ export default defineConfig(() => {
         host: '0.0.0.0',
       },
       plugins: [react(), localOcrData()],
+      build: {
+        rollupOptions: {
+          input: {
+            app: path.resolve(__dirname, 'index.html'),
+            guides: path.resolve(__dirname, 'guides.html'),
+            privacy: path.resolve(__dirname, 'privacy.html'),
+          },
+        },
+      },
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),

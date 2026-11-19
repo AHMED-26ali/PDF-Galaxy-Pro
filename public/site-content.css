@@ -1,0 +1,133 @@
+:root {
+    color-scheme: light;
+    color: #12213a;
+    background: #f5f7fb;
+    font-family: Cairo, "Noto Sans Arabic", Tahoma, system-ui, sans-serif;
+    line-height: 1.85;
+    text-size-adjust: 100%;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: #244fb3; text-underline-offset: 0.24em; }
+a:hover { color: #143580; }
+a:focus-visible { outline: 2px solid #245dce; outline-offset: 4px; }
+
+.frame {
+    width: min(100% - 2rem, 70rem);
+    margin-inline: auto;
+}
+
+.site-header {
+    background: #fff;
+    border-bottom: 1px solid #dfe6f0;
+}
+
+.header-inner {
+    min-height: 4.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    padding-block: 0.75rem;
+}
+
+.brand {
+    color: #12213a;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    text-decoration: none;
+    font-size: 1.45rem;
+    font-weight: 850;
+}
+
+.brand img { display: block; }
+.brand span { color: #087969; }
+.header-inner nav, .site-footer { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
+.header-inner nav a, .site-footer a { font-weight: 700; font-size: 0.9rem; }
+
+.intro {
+    padding-block: clamp(1.75rem, 5vw, 3.75rem) 1.1rem;
+}
+
+.intro h1 {
+    line-height: 1.3;
+    font-size: clamp(2rem, 5vw, 3.15rem);
+    letter-spacing: -0.03em;
+    margin: 0 0 0.65rem;
+}
+
+.intro p {
+    color: #43546b;
+    max-width: 47rem;
+    margin: 0 0 0.65rem;
+}
+
+.intro .muted { color: #586981; font-size: 0.88rem; }
+.policy { max-width: 50rem; margin-inline: auto; }
+.policy section, .guide {
+    background: #fff;
+    border: 1px solid #dfe6f0;
+    border-radius: 1rem;
+    padding: clamp(1rem, 3vw, 1.75rem);
+    min-width: 0;
+}
+
+.policy section + section { margin-top: 0.8rem; }
+.policy h2, .guide h2 { margin: 0 0 0.5rem; line-height: 1.45; font-size: 1.3rem; }
+.guide h3 { margin: 0.8rem 0 0.2rem; font-size: 0.98rem; }
+.policy p, .guide p { margin: 0 0 0.65rem; }
+.policy section p:last-child, .guide p:last-child { margin-bottom: 0; }
+
+.guide-index {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+    gap: 0.45rem 0.85rem;
+    background: #edf2f9;
+    border: 1px solid #dce5f1;
+    border-radius: 1rem;
+    padding: 0.85rem;
+    margin-bottom: 1.2rem;
+}
+
+.guide-index a {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 700;
+    padding: 0.3rem 0.65rem;
+}
+
+.guide-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.guide {
+    scroll-margin-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.guide:target { border-color: #3671ca; }
+.guide ol { margin: 0 0 0.6rem; padding-inline-start: 1.45rem; }
+.guide li + li { margin-top: 0.2rem; }
+.guide .note { color: #41546c; font-size: 0.92rem; }
+.guide .open-tool {
+    margin-top: auto;
+    padding-top: 0.7rem;
+    font-weight: 750;
+}
+
+.site-footer {
+    margin-top: 2rem;
+    border-top: 1px solid #dfe6f0;
+    padding-block: 1rem 1.5rem;
+}
+
+@media (max-width: 46rem) {
+    .guide-list { grid-template-columns: 1fr; }
+}

@@ -58,6 +58,10 @@ const ToolWrapper: React.FC<ToolWrapperProps> = ({ tool, onBack, children }) => 
                     {children}
                 </div>
             </div>
+
+            <a href={`/guides#${tool.id}`} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 hover:border-blue-300 hover:underline">
+                خطوات استخدام {tool.title}
+            </a>
         </div>
     );
 };

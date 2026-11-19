@@ -29,7 +29,10 @@ const Footer: React.FC = () => {
 
                 <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 font-medium">
                     <p>© {new Date().getFullYear()} {brandName}. جميع الحقوق محفوظة.</p>
-                    <p className="text-slate-400">تتم معالجة جميع المستندات على جهاز المستخدم محلياً لضمان أقصى درجات الخصوصية.</p>
+                    <nav aria-label="معلومات PDFix" className="flex flex-wrap items-center justify-center gap-4 text-sm font-semibold text-slate-700">
+                        <a className="hover:text-blue-700 hover:underline" href="/guides">دليل استخدام الأدوات</a>
+                        <a className="hover:text-blue-700 hover:underline" href="/privacy">سياسة الخصوصية</a>
+                    </nav>
                 </div>
             </div>
         </footer>
