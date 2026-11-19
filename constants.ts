@@ -1,4 +1,5 @@
 import { Tool } from './types';
+import EditorEntry from './tools/pdf-editor/EditorEntry';
 import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, AddWatermarkPdf, QrCodeGenerator } from './tools';
 import { DeletePdfPages, ExtractPdfPages, ReorderPdfPages } from './tools/pdf-pages/OrganizePdfPages';
 import { CropPdfPages, SignPdf } from './tools/pdf-pages/EditPdfPage';
@@ -193,5 +194,15 @@ export const tools: Tool[] = [
         category: 'organize',
         categoryLabel: 'تنظيم المستندات',
         colorTheme: 'violet',
+    },
+    {
+        id: 'edit-pdf',
+        title: 'محرّر PDF',
+        description: 'عدّل نص الملف في موضعه، وأضف نصوصاً وصوراً وحرّك الصور وغيّر حجمها ودوّرها.',
+        icon: PencilSquareIcon,
+        component: EditorEntry,
+        category: 'organize',
+        categoryLabel: 'تنظيم المستندات',
+        colorTheme: 'indigo',
     },
 ];

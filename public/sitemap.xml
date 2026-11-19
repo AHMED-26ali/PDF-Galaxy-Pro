@@ -133,4 +133,8 @@
         <loc>https://pdf-galaxy-pro.vercel.app/?tool=sign</loc>
     </url>
 
+    <url>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=edit-pdf</loc>
+    </url>
+
 </urlset>
