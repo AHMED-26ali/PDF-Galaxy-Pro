@@ -4,9 +4,8 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { ArrowDownTrayIcon, ClipboardIcon, CheckIcon, MagnifyingGlassIcon, DocumentTextIcon, SparklesIcon } from '../components/icons';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
 
-declare const pdfjsLib: any;
-declare const download: any;
-declare const Tesseract: any;
+import { readDocumentText } from './ocrRuntime';
+import { downloadFile as download, pdfError } from './pdfRuntime';
 
 interface ExtractedPage {
     pageNumber: number;
@@ -54,111 +53,28 @@ const ExtractText: React.FC = () => {
         setStatus("جاري قراءة واستخراج النصوص...");
 
         try {
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-            const numPages = pdfDoc.numPages;
-            const extracted: ExtractedPage[] = [];
-
-            let totalExtractedLength = 0;
-
-            for (let i = 1; i <= numPages; i++) {
-                setStatus(`تحليل صفحة ${i} من ${numPages}...`);
-                const page = await pdfDoc.getPage(i);
-                const textContent = await page.getTextContent();
-
-                if (textContent.items.length > 0) {
-                    // Group text by Y coordinate to preserve lines
-                    const lineMap = new Map<number, any[]>();
-                    for (const item of textContent.items) {
-                        const y = Math.round(item.transform[5]);
-                        if (!lineMap.has(y)) {
-                            lineMap.set(y, []);
-                        }
-                        lineMap.get(y)!.push(item);
-                    }
-
-                    // Sort lines top to bottom
-                    const sortedY = Array.from(lineMap.keys()).sort((a, b) => b - a);
-                    const pageLines: string[] = [];
-
-                    for (const y of sortedY) {
-                        const items = lineMap.get(y)!;
-                        items.sort((a, b) => a.transform[4] - b.transform[4]);
-                        const lineStr = items.map(it => it.str).join(' ').trim();
-                        if (lineStr) {
-                            pageLines.push(lineStr);
-                        }
-                    }
-
-                    const pageText = pageLines.join('\n');
-                    totalExtractedLength += pageText.trim().length;
-
-                    extracted.push({
-                        pageNumber: i,
-                        text: pageText,
-                        wordCount: pageText.trim() ? pageText.trim().split(/\s+/).length : 0,
-                    });
-                } else {
-                    extracted.push({
-                        pageNumber: i,
-                        text: '',
-                        wordCount: 0,
-                    });
-                }
-            }
-
-            // If no embedded text found and OCR wasn't requested yet
-            if (totalExtractedLength === 0 && !useOcrFallback) {
+            const pages = await readDocumentText(file, useOcrFallback, setStatus, message => {
+                if (message.status === 'recognizing text') setOcrProgress(Math.round(message.progress * 100));
+            });
+            if (!pages) {
                 setNeedsOcr(true);
-                setIsLoading(false);
-                setStatus('');
                 return;
             }
-
-            // If OCR fallback requested
-            if (useOcrFallback) {
-                setStatus('جاري تهيئة التعرف الضوئي (OCR)...');
-                const worker = await Tesseract.createWorker('ara+eng', 1, {
-                    logger: (m: any) => {
-                        if (m.status === 'recognizing text') {
-                            setOcrProgress(Math.round(m.progress * 100));
-                        }
-                    }
-                });
-
-                for (let i = 1; i <= numPages; i++) {
-                    setStatus(`مسح ضوئي لصفحة ${i} من ${numPages}...`);
-                    const page = await pdfDoc.getPage(i);
-                    const viewport = page.getViewport({ scale: 2.0 });
-                    const canvas = document.createElement("canvas");
-                    const context = canvas.getContext("2d");
-                    if (!context) continue;
-
-                    canvas.height = viewport.height;
-                    canvas.width = viewport.width;
-                    await page.render({ canvasContext: context, viewport }).promise;
-
-                    const { data } = await worker.recognize(canvas);
-                    const recognized = data.text || '';
-
-                    extracted[i - 1] = {
-                        pageNumber: i,
-                        text: recognized,
-                        wordCount: recognized.trim() ? recognized.trim().split(/\s+/).length : 0,
-                    };
-                }
-
-                await worker.terminate();
+            if (!pages.some(Boolean)) {
+                setError('لم يتم العثور على نص مقروء في المستند.');
+                return;
             }
-
-            setPagesData(extracted);
+            setPagesData(pages.map((text, index) => ({
+                pageNumber: index + 1,
+                text,
+                wordCount: text ? text.split(/\s+/).length : 0,
+            })));
+        } catch (error) {
+            setError(pdfError(error, 'تعذّر استخراج النصوص. تأكد من سلامة الملف وجرّب مرة أخرى.'));
+        } finally {
             setIsLoading(false);
             setStatus('');
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "فشل استخراج النصوص من الملف.");
-            setIsLoading(false);
-            setStatus('');
+            setOcrProgress(0);
         }
     };
 
@@ -181,11 +97,15 @@ const ExtractText: React.FC = () => {
         return { totalWords, totalChars, totalPages: pagesData.length };
     }, [pagesData]);
 
-    const handleCopy = () => {
+    const handleCopy = async () => {
         if (!displayText) return;
-        navigator.clipboard.writeText(displayText);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        try {
+            await navigator.clipboard.writeText(displayText);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch {
+            setError('تعذّر النسخ إلى الحافظة. يمكنك تنزيل النص أو تحديده يدوياً.');
+        }
     };
 
     const handleDownloadTxt = () => {

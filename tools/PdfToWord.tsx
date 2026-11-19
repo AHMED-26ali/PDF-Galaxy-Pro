@@ -2,17 +2,10 @@ import React, { useState, useCallback } from 'react';
 import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { DocumentTextIcon, ArrowDownTrayIcon, ClipboardIcon, CheckIcon, SparklesIcon } from '../components/icons';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
+import { Document, Packer, Paragraph, TextRun, AlignmentType } from 'docx';
 
-declare const pdfjsLib: any;
-declare const download: any;
-declare const Tesseract: any;
-
-interface ExtractedParagraph {
-    text: string;
-    isHeading?: boolean;
-    fontSize?: number;
-}
+import { readDocumentText } from './ocrRuntime';
+import { downloadFile as download, pdfError } from './pdfRuntime';
 
 const PdfToWord: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
@@ -44,234 +37,56 @@ const PdfToWord: React.FC = () => {
         }
     }, []);
 
-    // Create a genuine .docx document using docx library
-    const generateDocx = async (text: string, paragraphsList?: ExtractedParagraph[]): Promise<Blob> => {
-        const rawLines: ExtractedParagraph[] = paragraphsList && paragraphsList.length > 0 
-            ? paragraphsList 
-            : text.split(/\r?\n\r?\n/).map(p => ({ text: p.trim(), isHeading: false })).filter(p => p.text.length > 0);
-
-        const docxChildren: Paragraph[] = [];
-
-        // Title header
-        docxChildren.push(
-            new Paragraph({
-                children: [
-                    new TextRun({
-                        text: file ? file.name.replace(/\.pdf$/i, '') : 'مستند محول',
-                        bold: true,
-                        size: 36, // 18pt
-                        font: 'Cairo',
-                        color: '1E3A8A',
-                    })
-                ],
-                alignment: AlignmentType.RIGHT,
-                bidirectional: true,
-                spacing: { after: 300 },
-            })
-        );
-
-        for (const item of rawLines) {
-            const cleanText = item.text.trim();
-            if (!cleanText) continue;
-
-            const isShortTitle = cleanText.length < 60 && !cleanText.endsWith('.') && !cleanText.endsWith('،');
-            
-            docxChildren.push(
-                new Paragraph({
-                    children: [
-                        new TextRun({
-                            text: cleanText,
-                            bold: item.isHeading || isShortTitle,
-                            size: item.isHeading || isShortTitle ? 28 : 24, // 14pt or 12pt
-                            font: 'Arial',
-                        })
-                    ],
-                    alignment: AlignmentType.RIGHT,
-                    bidirectional: true,
-                    spacing: {
-                        before: item.isHeading || isShortTitle ? 200 : 100,
-                        after: 150,
-                        line: 360, // 1.5 line spacing
-                    },
-                })
-            );
-        }
-
-        const doc = new Document({
-            sections: [
-                {
-                    properties: {
-                        page: {
-                            margin: {
-                                top: 1440, // 1 inch
-                                right: 1440,
-                                bottom: 1440,
-                                left: 1440,
-                            },
-                        },
-                    },
-                    children: docxChildren,
-                },
-            ],
-        });
-
-        return await Packer.toBlob(doc);
-    };
-
-    const processConversion = async (text: string, paragraphsList?: ExtractedParagraph[]) => {
+    const convert = async (useOcrFallback: boolean) => {
+        if (!file) return;
+        setNeedsOcr(false);
+        setError(null);
+        setIsLoading(true);
         try {
-            if (!text.trim()) {
-                setError("لم يتم العثور على أي نصوص لتحويلها إلى Word.");
-                setIsLoading(false);
-                setStatus('');
+            const pages = await readDocumentText(file, useOcrFallback, setStatus, message => {
+                if (message.status === 'recognizing text') setOcrProgress(Math.round(message.progress * 100));
+            });
+            if (!pages) {
+                setNeedsOcr(true);
+                return;
+            }
+            if (!pages.some(Boolean)) {
+                setError('لم يتم العثور على نص مقروء لتحويله إلى Word.');
                 return;
             }
 
-            setStatus("جاري إنشاء مستند Word (.docx) أصلي متوافق 100%...");
-            setOcrProgress(0);
-
-            const blob = await generateDocx(text, paragraphsList);
+            setStatus('جاري إنشاء مستند Word…');
+            const paragraphs = pages.flatMap((page, pageIndex) => page.split('\n').map((text, lineIndex) => {
+                const rightToLeft = /[\u0600-\u08ff]/.test(text);
+                return new Paragraph({
+                    pageBreakBefore: pageIndex > 0 && lineIndex === 0,
+                    alignment: rightToLeft ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                    bidirectional: rightToLeft,
+                    children: [new TextRun({ text, font: 'Arial', rightToLeft })],
+                });
+            }));
+            const blob = await Packer.toBlob(new Document({ sections: [{ children: paragraphs }] }));
             setDocxBlob(blob);
-            setExtractedText(text);
-
-            // Auto trigger download of genuine DOCX
-            const cleanName = (file ? file.name.replace(/\.pdf$/i, '') : 'document') + '.docx';
-            download(blob, cleanName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-
+            setExtractedText(pages.join('\n\n'));
+            download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        } catch (error) {
+            setError(pdfError(error, 'تعذّر تحويل الملف إلى Word. تأكد من سلامة ملف PDF.'));
+        } finally {
             setIsLoading(false);
             setStatus('');
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "حدث خطأ أثناء إنشاء ملف Word.");
-            setIsLoading(false);
-            setStatus('');
+            setOcrProgress(0);
         }
     };
 
-    const runOcrAndConvert = async () => {
-        if (!file) return;
-
-        setNeedsOcr(false);
-        setIsLoading(true);
-        setError(null);
-        setStatus('تحضير محرك المسح الضوئي (OCR)...');
-
-        try {
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-            const numPages = pdfDoc.numPages;
-            let fullText = '';
-
-            const worker = await Tesseract.createWorker('ara+eng', 1, {
-                logger: (m: any) => {
-                    if (m.status === 'recognizing text') {
-                        setOcrProgress(Math.round(m.progress * 100));
-                    }
-                }
-            });
-
-            for (let i = 1; i <= numPages; i++) {
-                setStatus(`جاري قراءة واستخراج نص صفحة ${i} من ${numPages}...`);
-                const page = await pdfDoc.getPage(i);
-                const viewport = page.getViewport({ scale: 2.0 });
-                const canvas = document.createElement("canvas");
-                const context = canvas.getContext("2d");
-                if (!context) continue;
-
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
-                await page.render({ canvasContext: context, viewport }).promise;
-
-                const { data } = await worker.recognize(canvas);
-                fullText += data.text + '\n\n';
-            }
-            await worker.terminate();
-
-            await processConversion(fullText);
-
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "فشلت عملية المسح الضوئي. يرجى التأكد من جودة الملف.");
-            setIsLoading(false);
-            setStatus('');
-        }
-    };
-
-    const handleInitialCheck = async () => {
-        if (!file) return;
-        setIsLoading(true);
-        setError(null);
-        setNeedsOcr(false);
-
-        try {
-            setStatus("جاري تحليل واستخراج نصوص الـ PDF بدقة...");
-            const arrayBuffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-            let fullText = '';
-            const structuredParagraphs: ExtractedParagraph[] = [];
-
-            for (let i = 1; i <= pdf.numPages; i++) {
-                const page = await pdf.getPage(i);
-                const textContent = await page.getTextContent();
-                if (textContent.items.length === 0) continue;
-
-                // Group text items by vertical position (lines)
-                const lineMap = new Map<number, any[]>();
-                for (const item of textContent.items) {
-                    const y = Math.round(item.transform[5]);
-                    if (!lineMap.has(y)) {
-                        lineMap.set(y, []);
-                    }
-                    lineMap.get(y)!.push(item);
-                }
-
-                // Sort lines from top to bottom
-                const sortedY = Array.from(lineMap.keys()).sort((a, b) => b - a);
-                let currentParagraph = '';
-
-                for (const y of sortedY) {
-                    const items = lineMap.get(y)!;
-                    // Sort items from right to left or left to right depending on order
-                    items.sort((a, b) => a.transform[4] - b.transform[4]);
-                    const lineText = items.map(item => item.str).join(' ').trim();
-                    if (!lineText) continue;
-
-                    if (currentParagraph && (y - (sortedY[sortedY.indexOf(y) - 1] || y) < -25)) {
-                        structuredParagraphs.push({ text: currentParagraph });
-                        fullText += currentParagraph + '\n\n';
-                        currentParagraph = lineText;
-                    } else {
-                        currentParagraph = currentParagraph ? `${currentParagraph} ${lineText}` : lineText;
-                    }
-                }
-
-                if (currentParagraph) {
-                    structuredParagraphs.push({ text: currentParagraph });
-                    fullText += currentParagraph + '\n\n';
-                }
-            }
-
-            if (!fullText.trim()) {
-                setNeedsOcr(true);
-                setIsLoading(false);
-                setStatus('');
-            } else {
-                await processConversion(fullText, structuredParagraphs);
-            }
-
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "حدث خطأ أثناء معالجة ملف الـ PDF.");
-            setIsLoading(false);
-            setStatus('');
-        }
-    };
-
-    const handleCopy = () => {
+    const handleCopy = async () => {
         if (!extractedText) return;
-        navigator.clipboard.writeText(extractedText);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        try {
+            await navigator.clipboard.writeText(extractedText);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch {
+            setError('تعذّر النسخ إلى الحافظة. يمكنك تنزيل مستند Word.');
+        }
     };
 
     const handleManualDownload = () => {
@@ -310,7 +125,7 @@ const PdfToWord: React.FC = () => {
                         <button onClick={resetState} className="bg-white text-slate-700 font-bold py-2.5 px-6 rounded-2xl border border-slate-200 hover:bg-slate-50 transition-colors text-sm">
                             إلغاء
                         </button>
-                        <button onClick={runOcrAndConvert} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-2.5 px-7 rounded-2xl shadow-md shadow-blue-500/20 hover:opacity-95 transition-opacity text-sm flex items-center gap-2">
+                        <button onClick={() => convert(true)} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-2.5 px-7 rounded-2xl shadow-md shadow-blue-500/20 hover:opacity-95 transition-opacity text-sm flex items-center gap-2">
                             <SparklesIcon className="w-4 h-4" />
                             بدء المسح الضوئي والتحويل لـ Word
                         </button>
@@ -387,7 +202,7 @@ const PdfToWord: React.FC = () => {
                         تغيير الملف
                     </button>
                     <button
-                        onClick={handleInitialCheck}
+                        onClick={() => convert(false)}
                         className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-3.5 px-8 rounded-2xl hover:opacity-95 shadow-lg shadow-blue-500/25 transition-all text-sm flex items-center gap-2"
                     >
                         <SparklesIcon className="w-5 h-5" />

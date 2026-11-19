@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { canvasToBlob, clearCanvas } from '../pdfRuntime';
 import PdfPagePreview from './PdfPagePreview';
 import { cropPage, getSignatureRectangle, getVisiblePage, type Edges } from './pdfOperations';
-import { PdfDownload, PdfWorkspace, field, outputFilename, type OpenPdf } from './PdfWorkspace';
+import { PdfDownload, PdfWorkspace, field, outputFilename, secondaryButton, type OpenPdf } from './PdfWorkspace';
 
 const edgeKeys = ['top', 'right', 'bottom', 'left'] as const;
 const initialEdges: Edges = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -59,6 +60,7 @@ function CropPageEditor({ file }: { file: OpenPdf }) {
                                     type="number"
                                     min={0}
                                     max={99}
+                                    step={0.1}
                                     value={edges[edge]}
                                     className={field}
                                     onChange={event => {
@@ -69,6 +71,7 @@ function CropPageEditor({ file }: { file: OpenPdf }) {
                             </label>
                         ))}
                     </fieldset>
+                    <button type="button" disabled={!changed} className={secondaryButton} onClick={() => setEdges(initialEdges)}>إعادة ضبط الهوامش</button>
                     {pageCount > 1 && (
                         <label className="flex items-center gap-2 text-sm font-bold text-slate-800">
                             <input type="checkbox" className="h-5 w-5 accent-blue-600" checked={applyToAll} onChange={event => setApplyToAll(event.currentTarget.checked)} />
@@ -97,8 +100,7 @@ function CropPageEditor({ file }: { file: OpenPdf }) {
 }
 
 type SignatureImage = {
-    bytes: Uint8Array<ArrayBuffer>;
-    format: 'png' | 'jpeg';
+    blob: Blob;
     aspectRatio: number;
 };
 
@@ -119,7 +121,7 @@ function SignaturePageEditor({ file }: { file: OpenPdf }) {
             setSignatureUrl('');
             return;
         }
-        const url = URL.createObjectURL(new Blob([signature.bytes], { type: `image/${signature.format}` }));
+        const url = URL.createObjectURL(signature.blob);
         setSignatureUrl(url);
         return () => URL.revokeObjectURL(url);
     }, [signature]);
@@ -128,18 +130,31 @@ function SignaturePageEditor({ file }: { file: OpenPdf }) {
         setSignature(null);
         setError('');
         setLoading(true);
+        const url = URL.createObjectURL(upload);
+        const canvas = document.createElement('canvas');
         try {
-            const [{ PDFDocument }, buffer] = await Promise.all([import('pdf-lib'), upload.arrayBuffer()]);
-            const bytes = new Uint8Array(buffer);
-            const format = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'png' : 'jpeg';
-            const scratch = await PDFDocument.create();
-            const image = format === 'png' ? await scratch.embedPng(bytes) : await scratch.embedJpg(bytes);
-            const aspectRatio = image.width / image.height;
-            if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) throw new Error('Invalid image dimensions');
-            setSignature({ bytes, format, aspectRatio });
+            const header = new Uint8Array(await upload.slice(0, 8).arrayBuffer());
+            const png = header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e;
+            const jpeg = header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+            if (!png && !jpeg) throw new Error('Unsupported image');
+            const image = new Image();
+            image.src = url;
+            await image.decode();
+            // Decode once so the saved PDF uses the same EXIF orientation as the preview.
+            const resize = Math.min(1, 1400 / Math.max(image.naturalWidth, image.naturalHeight));
+            canvas.width = Math.max(1, Math.round(image.naturalWidth * resize));
+            canvas.height = Math.max(1, Math.round(image.naturalHeight * resize));
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('Canvas unavailable');
+            context.drawImage(image, 0, 0, canvas.width, canvas.height);
+            const aspectRatio = canvas.width / canvas.height;
+            const blob = await canvasToBlob(canvas);
+            setSignature({ blob, aspectRatio });
         } catch {
             setError('تعذّر فتح الصورة. اختر صورة PNG أو JPG سليمة.');
         } finally {
+            clearCanvas(canvas);
+            URL.revokeObjectURL(url);
             setLoading(false);
         }
     }
@@ -149,7 +164,7 @@ function SignaturePageEditor({ file }: { file: OpenPdf }) {
         const { PDFDocument, degrees } = await import('pdf-lib');
         const pdf = await PDFDocument.load(file.bytes, { updateMetadata: false });
         const targetPage = pdf.getPage(pageIndex);
-        const image = signature.format === 'png' ? await pdf.embedPng(signature.bytes) : await pdf.embedJpg(signature.bytes);
+        const image = await pdf.embedPng(await signature.blob.arrayBuffer());
         const origin = page.toPdfPoint(rect.x, rect.y + rect.height);
         targetPage.drawImage(image, {
             ...origin,

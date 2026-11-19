@@ -3,19 +3,33 @@ import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { LockClosedIcon, ShieldCheckIcon, EyeSlashIcon, SparklesIcon, ArrowDownTrayIcon, ChevronRightIcon, ChevronLeftIcon, TrashIcon } from '../components/icons';
 
-declare const PDFLib: any;
-declare const pdfjsLib: any;
-declare const download: any;
+import { canvasToBlob, clearCanvas, downloadFile as download, pdfError, renderPdfPage, withPdf } from './pdfRuntime';
 
 type ProtectionMode = 'password' | 'redact' | 'flatten';
 
-interface RedactionBox {
-    id: string;
-    page: number;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
+type Point = { x: number; y: number };
+type Region = Point & { width: number; height: number };
+type RedactionBox = Region & { id: string; page: number };
+
+function pointerPoint(event: React.PointerEvent<HTMLDivElement>): Point {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+        x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+        y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    };
+}
+
+function selection(start: Point, end: Point): Region {
+    return {
+        x: Math.min(start.x, end.x),
+        y: Math.min(start.y, end.y),
+        width: Math.abs(start.x - end.x),
+        height: Math.abs(start.y - end.y),
+    };
+}
+
+function boxStyle(box: Region) {
+    return { left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` };
 }
 
 const ProtectPdf: React.FC = () => {
@@ -39,333 +53,153 @@ const ProtectPdf: React.FC = () => {
     const [currentPage, setCurrentPage] = useState(1);
     const [redactions, setRedactions] = useState<RedactionBox[]>([]);
     const [redactColor, setRedactColor] = useState<'black' | 'white'>('black');
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
-    const [currentDraftBox, setCurrentDraftBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+    const [draft, setDraft] = useState<Region | null>(null);
+    const [preview, setPreview] = useState<{ file: File; page: number; url: string } | null>(null);
+    const drawStart = useRef<Point | null>(null);
 
-    const canvasRef = useRef<HTMLCanvasElement | null>(null);
-    const canvasContainerRef = useRef<HTMLDivElement | null>(null);
-    const pageRenderRef = useRef<{ width: number; height: number }>({ width: 595, height: 842 });
-
-    const onFilesSelected = useCallback((selectedFiles: File[]) => {
-        if (selectedFiles.length > 0) {
-            setFile(selectedFiles[0]);
-            setError(null);
-            setUserPassword('');
-            setConfirmPassword('');
-            setRedactions([]);
-            setCurrentPage(1);
-        }
+    const onFilesSelected = useCallback((files: File[]) => {
+        if (!files[0]) return;
+        setFile(files[0]);
+        setError(null);
+        setUserPassword('');
+        setConfirmPassword('');
+        setRedactions([]);
+        setCurrentPage(1);
+        setTotalPages(1);
     }, []);
 
-    // Load PDF page count and render page for redaction
-    useEffect(() => {
-        if (!file) return;
-        let isCancelled = false;
-
-        const loadDoc = async () => {
-            try {
-                const arrayBuffer = await file.arrayBuffer();
-                const doc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-                if (!isCancelled) {
-                    setTotalPages(doc.numPages);
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        };
-
-        loadDoc();
-        return () => {
-            isCancelled = true;
-        };
-    }, [file]);
-
-    // Render current page for redaction mode
     useEffect(() => {
         if (!file || mode !== 'redact') return;
-        let isCancelled = false;
+        let active = true;
+        withPdf(file, async pdf => {
+            if (!active) return;
+            setTotalPages(pdf.numPages);
+            const canvas = await renderPdfPage(await pdf.getPage(currentPage), 1.5, 1050);
+            if (active) setPreview({ file, page: currentPage, url: canvas.toDataURL('image/png') });
+            clearCanvas(canvas);
+        }).catch(error => {
+            if (active) setError(pdfError(error, 'تعذّر عرض الصفحة. تأكد من سلامة ملف PDF.'));
+        });
+        return () => { active = false; };
+    }, [file, currentPage, mode]);
 
-        const renderPage = async () => {
-            try {
-                const arrayBuffer = await file.arrayBuffer();
-                const doc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-                const page = await doc.getPage(currentPage);
-                const viewport = page.getViewport({ scale: 1.2 });
-                pageRenderRef.current = { width: viewport.width, height: viewport.height };
+    function startSelection(event: React.PointerEvent<HTMLDivElement>) {
+        if (!event.isPrimary || event.button !== 0 || isLoading) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drawStart.current = pointerPoint(event);
+    }
 
-                const canvas = canvasRef.current;
-                if (!canvas) return;
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return;
+    function moveSelection(event: React.PointerEvent<HTMLDivElement>) {
+        if (drawStart.current) setDraft(selection(drawStart.current, pointerPoint(event)));
+    }
 
-                await page.render({ canvasContext: ctx, viewport }).promise;
-                if (isCancelled) return;
+    function clearSelection() {
+        drawStart.current = null;
+        setDraft(null);
+    }
 
-                // Render saved redactions for this page
-                drawOverlayRedactions(ctx, viewport.width, viewport.height);
-            } catch (err) {
-                console.error(err);
+    function endSelection(event: React.PointerEvent<HTMLDivElement>) {
+        if (drawStart.current) {
+            const box = selection(drawStart.current, pointerPoint(event));
+            if (box.width > 0.008 && box.height > 0.008) {
+                const area = { ...box, id: crypto.randomUUID(), page: currentPage };
+                setRedactions(current => [...current, area]);
             }
-        };
-
-        renderPage();
-        return () => {
-            isCancelled = true;
-        };
-    }, [file, currentPage, mode, redactions, redactColor]);
-
-    const drawOverlayRedactions = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-        const pageRedactions = redactions.filter(r => r.page === currentPage);
-        for (const box of pageRedactions) {
-            ctx.fillStyle = redactColor === 'black' ? '#000000' : '#ffffff';
-            ctx.fillRect(box.x, box.y, box.width, box.height);
-
-            // subtle border to see in editor
-            ctx.strokeStyle = redactColor === 'black' ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.3)';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(box.x, box.y, box.width, box.height);
         }
-    };
+        clearSelection();
+    }
 
-    // Redaction drawing mouse handlers
-    const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (mode !== 'redact') return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        const scaleX = pageRenderRef.current.width / rect.width;
-        const scaleY = pageRenderRef.current.height / rect.height;
-        const x = (e.clientX - rect.left) * scaleX;
-        const y = (e.clientY - rect.top) * scaleY;
+    function removeLastRedaction() {
+        const last = redactions.filter(box => box.page === currentPage).at(-1);
+        if (last) setRedactions(current => current.filter(box => box.id !== last.id));
+    }
 
-        setIsDrawing(true);
-        setDrawStart({ x, y });
-        setCurrentDraftBox({ x, y, width: 0, height: 0 });
-    };
+    function clearAllPageRedactions() {
+        setRedactions(current => current.filter(box => box.page !== currentPage));
+    }
 
-    const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!isDrawing || !drawStart) return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        const scaleX = pageRenderRef.current.width / rect.width;
-        const scaleY = pageRenderRef.current.height / rect.height;
-        const currentX = (e.clientX - rect.left) * scaleX;
-        const currentY = (e.clientY - rect.top) * scaleY;
-
-        const x = Math.min(drawStart.x, currentX);
-        const y = Math.min(drawStart.y, currentY);
-        const width = Math.abs(currentX - drawStart.x);
-        const height = Math.abs(currentY - drawStart.y);
-
-        setCurrentDraftBox({ x, y, width, height });
-    };
-
-    const handleMouseUp = () => {
-        if (!isDrawing || !currentDraftBox) {
-            setIsDrawing(false);
-            setDrawStart(null);
-            setCurrentDraftBox(null);
-            return;
-        }
-
-        if (currentDraftBox.width > 5 && currentDraftBox.height > 5) {
-            const newBox: RedactionBox = {
-                id: Math.random().toString(36).substring(2, 9),
-                page: currentPage,
-                x: currentDraftBox.x,
-                y: currentDraftBox.y,
-                width: currentDraftBox.width,
-                height: currentDraftBox.height,
-            };
-            setRedactions(prev => [...prev, newBox]);
-        }
-
-        setIsDrawing(false);
-        setDrawStart(null);
-        setCurrentDraftBox(null);
-    };
-
-    const removeLastRedaction = () => {
-        const pageRedactions = redactions.filter(r => r.page === currentPage);
-        if (pageRedactions.length > 0) {
-            const last = pageRedactions[pageRedactions.length - 1];
-            setRedactions(prev => prev.filter(r => r.id !== last.id));
-        }
-    };
-
-    const clearAllPageRedactions = () => {
-        setRedactions(prev => prev.filter(r => r.page !== currentPage));
-    };
-
-    // --- EXECUTE ACTIONS ---
-
-    // 1. Password Protection (Via /api/pdf/protect server backend + GS 128-bit encryption)
-    const handlePasswordProtect = async () => {
+    async function handlePasswordProtect() {
         if (!file) return;
-        if (!userPassword) {
-            setError("يرجى إدخال كلمة مرور الحماية.");
+        if (!userPassword.trim()) {
+            setError('اكتب كلمة مرور لفتح المستند.');
             return;
         }
         if (userPassword !== confirmPassword) {
-            setError("كلمتا المرور غير متطابقتين.");
+            setError('كلمتا المرور غير متطابقتين.');
             return;
         }
-
+        if (new TextEncoder().encode(userPassword).length > 127) {
+            setError('كلمة المرور طويلة جداً. اختر كلمة مرور أقصر.');
+            return;
+        }
         setIsLoading(true);
         setError(null);
-        setStatus("جاري تشفير المستند وحمايته بكلمة المرور...");
-
+        setStatus('جاري تشفير المستند داخل المتصفح…');
         try {
-            const arrayBuffer = await file.arrayBuffer();
-            const base64Pdf = btoa(
-                new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-            );
-
-            const response = await fetch('/api/pdf/protect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    pdfBase64: base64Pdf,
-                    userPassword,
-                    permissions: {
-                        allowPrinting,
-                        allowCopying,
-                        allowModifying,
-                    }
-                }),
+            const [{ encryptPDF }, buffer] = await Promise.all([import('@pdfsmaller/pdf-encrypt'), file.arrayBuffer()]);
+            const output = await encryptPDF(new Uint8Array(buffer), userPassword, {
+                algorithm: 'AES-256',
+                ownerPassword: crypto.randomUUID(),
+                allowPrinting,
+                allowCopying,
+                allowModifying,
+                allowAnnotating: allowModifying,
+                allowFillingForms: allowModifying,
+                allowAssembly: allowModifying,
             });
-
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                throw new Error(errData.error || `خطأ في الخادم: ${response.status}`);
-            }
-
-            const blob = await response.blob();
-            const cleanName = file.name.replace(/\.pdf$/i, '') + '_protected.pdf';
-            download(blob, cleanName, 'application/pdf');
-
-            setIsLoading(false);
-            setStatus('');
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "حدث خطأ أثناء تشفير المستند.");
+            download(output, file.name.replace(/\.pdf$/i, '') + '_protected.pdf', 'application/pdf');
+        } catch (error) {
+            setError(pdfError(error, 'تعذّر تشفير المستند. تأكد من أن الملف سليم ومفتوح.'));
+        } finally {
             setIsLoading(false);
             setStatus('');
         }
-    };
+    }
 
-    // 2. Permanent Redaction (Permanently burning opaque blackout boxes into the PDF page streams)
-    const handleApplyRedactions = async () => {
-        if (!file) return;
-        if (redactions.length === 0) {
-            setError("لم تقم بتحديد أي مناطق للتعتيم بعد. اسحب بالماوس فوق النص الحساس لتحديده.");
-            return;
-        }
-
+    async function saveRasterPdf(redact: boolean) {
+        if (!file || (redact && !redactions.length)) return;
         setIsLoading(true);
         setError(null);
-        setStatus("جاري حجب وتعتيم البيانات المحددة بشكل دائم...");
-
         try {
-            const { PDFDocument, rgb } = PDFLib;
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await PDFDocument.load(arrayBuffer);
-            const pages = pdfDoc.getPages();
-
-            const fillColor = redactColor === 'black' ? rgb(0, 0, 0) : rgb(1, 1, 1);
-
-            for (const r of redactions) {
-                if (r.page > pages.length) continue;
-                const page = pages[r.page - 1];
-                const { width: pdfWidth, height: pdfHeight } = page.getSize();
-
-                // Convert from canvas preview coordinates to PDF coordinates
-                const scaleX = pdfWidth / pageRenderRef.current.width;
-                const scaleY = pdfHeight / pageRenderRef.current.height;
-
-                const pdfX = r.x * scaleX;
-                const pdfWidthBox = r.width * scaleX;
-                const pdfHeightBox = r.height * scaleY;
-                // PDF coordinate origin is bottom-left
-                const pdfY = pdfHeight - ((r.y + r.height) * scaleY);
-
-                page.drawRectangle({
-                    x: pdfX,
-                    y: pdfY,
-                    width: pdfWidthBox,
-                    height: pdfHeightBox,
-                    color: fillColor,
-                    borderColor: fillColor,
-                    borderWidth: 0,
-                });
-            }
-
-            const pdfBytes = await pdfDoc.save();
-            const cleanName = file.name.replace(/\.pdf$/i, '') + '_redacted.pdf';
-            download(pdfBytes, cleanName, 'application/pdf');
-
-            setIsLoading(false);
-            setStatus('');
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "حدث خطأ أثناء تطبيق التعتيم.");
+            const { PDFDocument } = await import('pdf-lib');
+            const output = await PDFDocument.create();
+            await withPdf(file, async pdf => {
+                for (let number = 1; number <= pdf.numPages; number++) {
+                    setStatus(`جاري معالجة صفحة ${number} من ${pdf.numPages}…`);
+                    const source = await pdf.getPage(number);
+                    const size = source.getViewport({ scale: 1 });
+                    const canvas = await renderPdfPage(source, 2.5);
+                    try {
+                        if (redact) {
+                            const context = canvas.getContext('2d');
+                            if (!context) throw new Error('Canvas unavailable');
+                            context.fillStyle = redactColor === 'black' ? '#000' : '#fff';
+                            for (const box of redactions.filter(box => box.page === number)) {
+                                const x = Math.floor(box.x * canvas.width);
+                                const y = Math.floor(box.y * canvas.height);
+                                const width = Math.ceil((box.x + box.width) * canvas.width) - x;
+                                const height = Math.ceil((box.y + box.height) * canvas.height) - y;
+                                context.fillRect(x, y, width, height);
+                            }
+                        }
+                        const image = await output.embedPng(await (await canvasToBlob(canvas)).arrayBuffer());
+                        const page = output.addPage([size.width, size.height]);
+                        page.drawImage(image, { x: 0, y: 0, width: size.width, height: size.height });
+                    } finally {
+                        clearCanvas(canvas);
+                        source.cleanup();
+                    }
+                }
+            });
+            const suffix = redact ? '_redacted.pdf' : '_flattened.pdf';
+            download(await output.save(), file.name.replace(/\.pdf$/i, '') + suffix, 'application/pdf');
+        } catch (error) {
+            setError(pdfError(error, 'تعذّر تجهيز نسخة المستند. تأكد من سلامة ملف PDF.'));
+        } finally {
             setIsLoading(false);
             setStatus('');
         }
-    };
-
-    // 3. Document Flattening & Read-Only Locking (Converting pages to high-res locked graphics to block text alteration)
-    const handleFlattenDocument = async () => {
-        if (!file) return;
-        setIsLoading(true);
-        setError(null);
-        setStatus("جاري تسطيح المستند وقفله ضد التعديل واستخراج النصوص...");
-
-        try {
-            const { PDFDocument } = PDFLib;
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-            const newDoc = await PDFDocument.create();
-
-            for (let i = 1; i <= pdfDoc.numPages; i++) {
-                setStatus(`جاري تأمين صفحة ${i} من ${pdfDoc.numPages}...`);
-                const page = await pdfDoc.getPage(i);
-                const viewport = page.getViewport({ scale: 2.0 });
-
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
-                const ctx = canvas.getContext('2d');
-                if (!ctx) continue;
-
-                await page.render({ canvasContext: ctx, viewport }).promise;
-                const pngDataUrl = canvas.toDataURL('image/png');
-                const pngBytes = await fetch(pngDataUrl).then(r => r.arrayBuffer());
-                const embeddedPng = await newDoc.embedPng(pngBytes);
-
-                const newPage = newDoc.addPage([page.view[2] - (page.view[0] || 0), page.view[3] - (page.view[1] || 0)]);
-                newPage.drawImage(embeddedPng, {
-                    x: 0,
-                    y: 0,
-                    width: newPage.getWidth(),
-                    height: newPage.getHeight(),
-                });
-            }
-
-            setStatus("حفظ المستند المقفل...");
-            const finalBytes = await newDoc.save();
-            const cleanName = file.name.replace(/\.pdf$/i, '') + '_readonly_flattened.pdf';
-            download(finalBytes, cleanName, 'application/pdf');
-
-            setIsLoading(false);
-            setStatus('');
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "حدث خطأ أثناء تسطيح المستند.");
-            setIsLoading(false);
-            setStatus('');
-        }
-    };
+    }
 
     return (
         <div className="max-w-5xl mx-auto space-y-6">
@@ -427,7 +261,7 @@ const ProtectPdf: React.FC = () => {
                             }`}
                         >
                             <ShieldCheckIcon className="w-4 h-4" />
-                            <span>قفل ضد التعديل (Flatten)</span>
+                            <span>تسطيح الصفحات</span>
                         </button>
                     </div>
 
@@ -438,17 +272,18 @@ const ProtectPdf: React.FC = () => {
                                 <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
                                     <LockClosedIcon className="w-7 h-7" />
                                 </div>
-                                <h3 className="text-xl font-black text-slate-800">حماية الـ PDF بتشفير AES معتمد</h3>
+                                <h3 className="text-xl font-black text-slate-800">حماية PDF بتشفير AES-256</h3>
                                 <p className="text-xs text-slate-500 mt-1">
-                                    لن يتمكن أي شخص من فتح المستند أو الاطلاع على محتواه بدون إدخال كلمة المرور.
+                                    يُشفّر المستند داخل المتصفح. احتفظ بكلمة المرور لفتح النسخة الناتجة.
                                 </p>
                             </div>
 
                             <div className="space-y-4">
                                 <div>
-                                    <label className="block text-xs font-bold text-slate-700 mb-1.5">كلمة مرور فتح المستند</label>
+                                    <label htmlFor="protect-password" className="block text-xs font-bold text-slate-700 mb-1.5">كلمة مرور فتح المستند</label>
                                     <input
                                         type="password"
+                                        id="protect-password"
                                         value={userPassword}
                                         onChange={(e) => setUserPassword(e.target.value)}
                                         placeholder="••••••••"
@@ -457,9 +292,10 @@ const ProtectPdf: React.FC = () => {
                                 </div>
 
                                 <div>
-                                    <label className="block text-xs font-bold text-slate-700 mb-1.5">تأكيد كلمة المرور</label>
+                                    <label htmlFor="protect-confirm" className="block text-xs font-bold text-slate-700 mb-1.5">تأكيد كلمة المرور</label>
                                     <input
                                         type="password"
+                                        id="protect-confirm"
                                         value={confirmPassword}
                                         onChange={(e) => setConfirmPassword(e.target.value)}
                                         placeholder="••••••••"
@@ -579,7 +415,8 @@ const ProtectPdf: React.FC = () => {
                                 <div className="flex items-center gap-4 mb-4">
                                     <button
                                         onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                        disabled={currentPage <= 1}
+                                        aria-label="الصفحة السابقة"
+                                        disabled={isLoading || currentPage <= 1}
                                         className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
                                     >
                                         <ChevronRightIcon className="w-5 h-5" />
@@ -589,7 +426,8 @@ const ProtectPdf: React.FC = () => {
                                     </span>
                                     <button
                                         onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                        disabled={currentPage >= totalPages}
+                                        aria-label="الصفحة التالية"
+                                        disabled={isLoading || currentPage >= totalPages}
                                         className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
                                     >
                                         <ChevronLeftIcon className="w-5 h-5" />
@@ -597,39 +435,39 @@ const ProtectPdf: React.FC = () => {
                                 </div>
 
                                 <p className="text-xs text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full mb-4 font-bold">
-                                    💡 انقر واسحب مؤشر الماوس فوق أي نص أو رقم أو توقيع ترغب في تعتيمه وإخفائه نهائياً
+                                    اسحب فوق المنطقة التي تريد تعتيمها بالماوس أو بإصبعك.
                                 </p>
 
-                                <div
-                                    ref={canvasContainerRef}
-                                    className="relative max-h-[600px] overflow-auto rounded-2xl border border-slate-200 bg-slate-100 p-2 shadow-inner"
-                                >
-                                    <canvas
-                                        ref={canvasRef}
-                                        onMouseDown={handleMouseDown}
-                                        onMouseMove={handleMouseMove}
-                                        onMouseUp={handleMouseUp}
-                                        className="cursor-crosshair rounded-lg shadow-md bg-white block"
-                                    />
-
-                                    {/* Draft drawing box overlay */}
-                                    {isDrawing && currentDraftBox && (
-                                        <div
-                                            className="absolute pointer-events-none border-2 border-indigo-500 bg-indigo-500/30"
-                                            style={{
-                                                left: `${(currentDraftBox.x / pageRenderRef.current.width) * (canvasRef.current?.clientWidth || 0) + 8}px`,
-                                                top: `${(currentDraftBox.y / pageRenderRef.current.height) * (canvasRef.current?.clientHeight || 0) + 8}px`,
-                                                width: `${(currentDraftBox.width / pageRenderRef.current.width) * (canvasRef.current?.clientWidth || 0)}px`,
-                                                height: `${(currentDraftBox.height / pageRenderRef.current.height) * (canvasRef.current?.clientHeight || 0)}px`,
-                                            }}
-                                        />
-                                    )}
-                                </div>
+                                {preview?.file === file && preview.page === currentPage ? (
+                                    <div
+                                        aria-label="معاينة لتحديد مناطق التعتيم"
+                                        className="relative w-fit max-w-full cursor-crosshair touch-none select-none overflow-hidden rounded-lg bg-white"
+                                        onPointerDown={startSelection}
+                                        onPointerMove={moveSelection}
+                                        onPointerUp={endSelection}
+                                        onPointerCancel={clearSelection}
+                                        onLostPointerCapture={clearSelection}
+                                    >
+                                        <img src={preview.url} alt={`معاينة صفحة ${currentPage}`} draggable={false} className="pointer-events-none block h-auto max-w-full" />
+                                        {redactions.filter(box => box.page === currentPage).map(box => (
+                                            <div
+                                                key={box.id}
+                                                aria-hidden="true"
+                                                className={`pointer-events-none absolute border border-slate-400 ${redactColor === 'black' ? 'bg-black' : 'bg-white'}`}
+                                                style={boxStyle(box)}
+                                            />
+                                        ))}
+                                        {draft && <div className="pointer-events-none absolute border-2 border-indigo-500 bg-indigo-500/30" style={boxStyle(draft)} />}
+                                    </div>
+                                ) : (
+                                    <p role="status" className="text-sm text-slate-600">{error ? 'معاينة الصفحة غير متاحة.' : 'جاري عرض الصفحة…'}</p>
+                                )}
+                                <p className="mt-3 text-xs text-slate-600">تُحفظ النسخة بعد التعتيم كصفحات مصوّرة لحذف النص الأصلي والمناطق المغطاة من الملف الناتج.</p>
 
                                 {/* Save Button */}
                                 <div className="mt-6 w-full max-w-md">
                                     <button
-                                        onClick={handleApplyRedactions}
+                                        onClick={() => saveRasterPdf(true)}
                                         disabled={isLoading || redactions.length === 0}
                                         className="w-full bg-gradient-to-r from-red-600 to-rose-600 text-white font-bold py-3.5 px-6 rounded-2xl hover:opacity-95 shadow-lg shadow-rose-500/25 transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
                                     >
@@ -657,21 +495,14 @@ const ProtectPdf: React.FC = () => {
                                 <ShieldCheckIcon className="w-8 h-8" />
                             </div>
                             <div>
-                                <h3 className="text-xl font-black text-slate-800">قفل المستند وتسطيحه (Flatten)</h3>
+                                <h3 className="text-xl font-black text-slate-800">تسطيح صفحات PDF</h3>
                                 <p className="text-slate-500 text-xs mt-2 leading-relaxed">
-                                    يقوم هذا الإجراء بتحويل صفحات الـ PDF إلى رسومات وصور عالية الدقة مدمجة تماماً، مما يمنع أي برامج أو مواقع من استخراج النصوص أو تعديل محتواها أو تزويرها، مع الحفاظ على وضوح القراءة 100%.
+                                    تحوّل الأداة كل صفحة إلى صورة داخل ملف PDF. تتحول النصوص والحقول التفاعلية إلى بكسلات. استخدم التشفير إذا أردت طلب كلمة مرور عند الفتح.
                                 </p>
                             </div>
 
-                            <div className="p-4 bg-emerald-50/60 rounded-2xl border border-emerald-100 text-xs text-emerald-800 text-right space-y-1.5">
-                                <p className="font-bold">✨ مميزات التسطيح والحماية:</p>
-                                <p>• منع تعديل النصوص بأي محرر PDF (مثل Adobe Acrobat).</p>
-                                <p>• قفل الحقول والنماذج والتوقيعات الإلكترونية نهائياً.</p>
-                                <p>• مثالي لإرسال العقود والفواتير والشهادات الرسمية.</p>
-                            </div>
-
                             <button
-                                onClick={handleFlattenDocument}
+                                onClick={() => saveRasterPdf(false)}
                                 disabled={isLoading}
                                 className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold py-3.5 px-6 rounded-2xl hover:opacity-95 shadow-lg shadow-emerald-500/25 transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
                             >
@@ -683,7 +514,7 @@ const ProtectPdf: React.FC = () => {
                                 ) : (
                                     <>
                                         <ShieldCheckIcon className="w-5 h-5" />
-                                        <span>قفل المستند وتسطيحه الآن</span>
+                                        <span>تسطيح وتنزيل PDF</span>
                                     </>
                                 )}
                             </button>

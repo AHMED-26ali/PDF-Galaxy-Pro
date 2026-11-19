@@ -4,15 +4,12 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { MagnifyingGlassIcon, ArrowDownTrayIcon, ClipboardIcon, CheckIcon, DocumentTextIcon, SparklesIcon } from '../components/icons';
 import { Document, Packer, Paragraph, TextRun, AlignmentType } from 'docx';
 
-declare const Tesseract: any;
-declare const PDFLib: any;
-declare const pdfjsLib: any;
-declare const download: any;
+import { createOcrWorker } from './ocrRuntime';
+import { canvasToBlob, clearCanvas, downloadFile as download, pdfError, renderPdfPage, withPdf } from './pdfRuntime';
 
 interface OcrPageResult {
     pageNumber: number;
     text: string;
-    words: any[];
 }
 
 const OcrPdf: React.FC = () => {
@@ -52,124 +49,79 @@ const OcrPdf: React.FC = () => {
         setStatus("جاري تهيئة محرك التعرف الضوئي الذكي...");
         setProgress(0);
 
+        setOcrResults([]);
+        setSearchablePdfBlob(null);
         try {
-            const { PDFDocument, rgb } = PDFLib;
+            const [{ PDFDocument }, { default: fontkit }, { default: fontUrl }] = await Promise.all([
+                import('pdf-lib'),
+                import('@pdf-lib/fontkit'),
+                import('@expo-google-fonts/noto-sans-arabic/400Regular/NotoSansArabic_400Regular.ttf?url'),
+            ]);
+            const fontResponse = await fetch(fontUrl);
+            if (!fontResponse.ok) throw new Error('تعذّر تحميل خط PDF القابل للبحث.');
+            const fontBytes = await fontResponse.arrayBuffer();
             const searchablePdf = await PDFDocument.create();
-
-            // Register fontkit for custom font embedding
-            if ((window as any).fontkit) {
-                searchablePdf.registerFontkit((window as any).fontkit);
-            }
-
-            // Attempt to load Arabic font with safe fallback
-            let customFont: any = null;
-            try {
-                const fontUrl = 'https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-arabic@5.0.19/files/noto-sans-arabic-arabic-400-normal.ttf';
-                const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
-                if ((window as any).fontkit) {
-                    customFont = await searchablePdf.embedFont(fontBytes);
-                }
-            } catch (fontErr) {
-                console.warn("Could not load external Arabic font, using fallback standard font", fontErr);
+            searchablePdf.registerFontkit(fontkit);
+            const font = await searchablePdf.embedFont(fontBytes, { subset: true });
+            const results = await withPdf(file, async pdf => {
+                const worker = await createOcrWorker(language, message => {
+                    if (message.status === 'recognizing text') setProgress(Math.round(message.progress * 100));
+                });
                 try {
-                    customFont = await searchablePdf.embedFont(PDFLib.StandardFonts.Helvetica);
-                } catch {}
-            }
+                    const pages: OcrPageResult[] = [];
+                    for (let number = 1; number <= pdf.numPages; number++) {
+                        setStatus(`التعرف الضوئي على صفحة ${number} من ${pdf.numPages}…`);
+                        const page = await pdf.getPage(number);
+                        const size = page.getViewport({ scale: 1 });
+                        const canvas = await renderPdfPage(page, 2.5);
+                        try {
+                            const { data } = await worker.recognize(canvas, {}, { text: true, blocks: true });
+                            const output = searchablePdf.addPage([size.width, size.height]);
+                            const visibleImage = await searchablePdf.embedPng(await (await canvasToBlob(canvas)).arrayBuffer());
+                            output.drawImage(visibleImage, { x: 0, y: 0, width: size.width, height: size.height });
 
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-            const numPages = pdfDoc.numPages;
-
-            const worker = await Tesseract.createWorker(language, 1, {
-                logger: (m: any) => {
-                    if (m.status === 'recognizing text') {
-                        setProgress(Math.round(m.progress * 100));
+                            for (const block of data.blocks ?? []) {
+                                for (const paragraph of block.paragraphs) {
+                                    for (const line of paragraph.lines) {
+                                        const text = line.text.trim();
+                                        const { x0, x1, y0, y1 } = line.bbox;
+                                        const textWidth = font.widthOfTextAtSize(text, 1);
+                                        if (!text || textWidth <= 0) continue;
+                                        const targetWidth = (x1 - x0) * size.width / canvas.width;
+                                        const targetHeight = (y1 - y0) * size.height / canvas.height;
+                                        output.drawText(text, {
+                                            x: x0 * size.width / canvas.width,
+                                            y: size.height - y1 * size.height / canvas.height,
+                                            size: Math.max(1, Math.min(targetHeight, targetWidth / textWidth)),
+                                            font,
+                                            opacity: 0,
+                                        });
+                                    }
+                                }
+                            }
+                            pages.push({ pageNumber: number, text: data.text.trim() });
+                        } finally {
+                            clearCanvas(canvas);
+                            page.cleanup();
+                        }
                     }
+                    return pages;
+                } finally {
+                    await worker.terminate();
                 }
             });
-
-            const pageResults: OcrPageResult[] = [];
-
-            for (let i = 1; i <= numPages; i++) {
-                setStatus(`تحليل والتعرف على نصوص صفحة ${i} من ${numPages}...`);
-                const page = await pdfDoc.getPage(i);
-                const viewport = page.getViewport({ scale: 2.0 });
-
-                const canvas = document.createElement("canvas");
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
-                const context = canvas.getContext("2d");
-                if (!context) continue;
-
-                await page.render({ canvasContext: context, viewport }).promise;
-
-                // Recognize text from high-res rendered canvas
-                const { data } = await worker.recognize(canvas);
-                pageResults.push({
-                    pageNumber: i,
-                    text: data.text || '',
-                    words: data.words || [],
-                });
-
-                // Add original page image to searchable PDF
-                const baseViewport = page.getViewport({ scale: 1.0 });
-                const newPage = searchablePdf.addPage([baseViewport.width, baseViewport.height]);
-
-                const imageBytes = await new Promise<ArrayBuffer>((resolve) => {
-                    canvas.toBlob(async (b) => {
-                        if (b) resolve(await b.arrayBuffer());
-                    }, 'image/png');
-                });
-
-                const image = await searchablePdf.embedPng(imageBytes);
-                newPage.drawImage(image, {
-                    x: 0,
-                    y: 0,
-                    width: newPage.getWidth(),
-                    height: newPage.getHeight()
-                });
-
-                // Embed invisible OCR text layer if font is available
-                if (customFont && data.words) {
-                    data.words.forEach((w: any) => {
-                        const { text, bbox } = w;
-                        const sanitized = text.replace(/[\u200e\u200f]/g, '').trim();
-                        if (sanitized.length > 0) {
-                            const x = (bbox.x0 / canvas.width) * newPage.getWidth();
-                            const y = newPage.getHeight() - ((bbox.y1 / canvas.height) * newPage.getHeight());
-                            const width = ((bbox.x1 - bbox.x0) / canvas.width) * newPage.getWidth();
-
-                            try {
-                                newPage.drawText(sanitized, {
-                                    x,
-                                    y,
-                                    size: Math.max(6, Math.min(24, (width / sanitized.length) * 1.5)),
-                                    font: customFont,
-                                    color: rgb(0, 0, 0),
-                                    opacity: 0, // Invisible selectable text layer
-                                });
-                            } catch {
-                                // Ignore characters not in font map
-                            }
-                        }
-                    });
-                }
+            if (!results.some(page => page.text)) {
+                setError('لم يتم العثور على نص مقروء. راجع لغة المستند وجودة المسح.');
+                return;
             }
-
-            await worker.terminate();
-            setStatus("جاري إنشاء ملف الـ PDF النهائي القابل للبحث...");
-
+            setStatus('جاري حفظ ملف PDF القابل للبحث…');
             const pdfBytes = await searchablePdf.save();
-            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-            setSearchablePdfBlob(blob);
-            setOcrResults(pageResults);
-
-            setIsLoading(false);
-            setStatus('');
-            setProgress(0);
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "حدث خطأ أثناء عملية التعرف الضوئي على الحروف.");
+            setSearchablePdfBlob(new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' }));
+            setOcrResults(results);
+        } catch (error) {
+            console.error(error);
+            setError(pdfError(error, 'تعذّر التعرف الضوئي. تأكد من سلامة الملف وجرّب مرة أخرى.'));
+        } finally {
             setIsLoading(false);
             setProgress(0);
             setStatus('');
@@ -178,11 +130,15 @@ const OcrPdf: React.FC = () => {
 
     const combinedText = ocrResults.map(p => `--- صفحة [${p.pageNumber}] ---\n${p.text}`).join('\n\n');
 
-    const handleCopy = () => {
+    const handleCopy = async () => {
         if (!combinedText) return;
-        navigator.clipboard.writeText(combinedText);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        try {
+            await navigator.clipboard.writeText(combinedText);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch {
+            setError('تعذّر النسخ إلى الحافظة. يمكنك تنزيل النص بصيغة Word.');
+        }
     };
 
     const handleDownloadSearchablePdf = () => {

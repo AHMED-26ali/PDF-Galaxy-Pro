@@ -1,80 +1,57 @@
 import { useEffect, useState, type ReactNode } from 'react';
 
-interface PdfPage {
-    getViewport(options: { scale: number }): { width: number; height: number };
-    render(options: { canvasContext: CanvasRenderingContext2D; viewport: ReturnType<PdfPage['getViewport']> }): {
-        promise: Promise<void>;
-        cancel(): void;
-    };
-}
-
-interface PreviewDocument {
-    getPage(page: number): Promise<PdfPage>;
-}
-
-declare const pdfjsLib: {
-    getDocument(options: { data: Uint8Array; isEvalSupported: boolean }): {
-        promise: Promise<PreviewDocument>;
-        destroy(): Promise<void>;
-    };
-};
+import { clearCanvas, openPdf, renderPdfPage, type PDFDocumentProxy } from '../pdfRuntime';
 
 export default function PdfPagePreview({ bytes, pageNumber, children }: {
     bytes: Uint8Array;
     pageNumber: number;
     children?: ReactNode;
 }) {
-    const [pdf, setPdf] = useState<PreviewDocument | null>(null);
+    const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
     const [image, setImage] = useState<{ pageNumber: number; src: string } | null>(null);
     const [documentError, setDocumentError] = useState(false);
     const [renderError, setRenderError] = useState<number | null>(null);
 
     useEffect(() => {
-        if (typeof pdfjsLib === 'undefined') {
-            setDocumentError(true);
-            return;
-        }
-        const task = pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false });
         let active = true;
-        task.promise.then(document => {
-            if (active) setPdf(document);
+        let document: PDFDocumentProxy | undefined;
+        openPdf(bytes).then(async loaded => {
+            if (!active) {
+                await loaded.destroy();
+                return;
+            }
+            document = loaded;
+            setPdf(loaded);
         }).catch(() => {
             if (active) setDocumentError(true);
         });
         return () => {
             active = false;
-            void task.destroy().catch(() => {});
+            if (document) void document.destroy().catch(() => {});
         };
     }, [bytes]);
 
     useEffect(() => {
         if (!pdf) return;
         let active = true;
-        let rendering: ReturnType<PdfPage['render']> | undefined;
         async function renderPage() {
             const page = await pdf.getPage(pageNumber);
             if (!active) return;
-            const naturalSize = page.getViewport({ scale: 1 });
-            const viewport = page.getViewport({ scale: 600 / Math.max(naturalSize.width, naturalSize.height) });
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.ceil(viewport.width);
-            canvas.height = Math.ceil(viewport.height);
-            const canvasContext = canvas.getContext('2d');
-            if (!canvasContext) throw new Error('Canvas unavailable');
-            rendering = page.render({ canvasContext, viewport });
-            await rendering.promise;
-            if (active) {
-                setImage({ pageNumber, src: canvas.toDataURL('image/png') });
-                setRenderError(null);
+            const canvas = await renderPdfPage(page, 2, 850);
+            try {
+                if (active) {
+                    setImage({ pageNumber, src: canvas.toDataURL('image/png') });
+                    setRenderError(null);
+                }
+            } finally {
+                clearCanvas(canvas);
+                page.cleanup();
             }
         }
         void renderPage().catch(() => {
             if (active) setRenderError(pageNumber);
         });
-        return () => {
-            active = false;
-            rendering?.cancel();
-        };
+        return () => { active = false; };
     }, [pdf, pageNumber]);
 
     return (
@@ -84,7 +61,7 @@ export default function PdfPagePreview({ bytes, pageNumber, children }: {
                 <p role="status" className="text-center text-sm text-slate-700">تعذّر عرض المعاينة. يمكنك متابعة العمل باستخدام رقم الصفحة.</p>
             ) : image?.pageNumber === pageNumber ? (
                 <div dir="ltr" className="relative mx-auto w-fit max-w-full overflow-hidden bg-white shadow-sm">
-                    <img alt={`معاينة محتوى الصفحة ${pageNumber}`} src={image.src} className="block h-auto max-h-[440px] max-w-full object-contain" />
+                    <img alt={`معاينة محتوى الصفحة ${pageNumber}`} src={image.src} className="block h-auto max-h-[440px] w-auto max-w-full" />
                     {children}
                 </div>
             ) : (

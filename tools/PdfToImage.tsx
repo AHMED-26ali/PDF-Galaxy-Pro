@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import JSZip from 'jszip';
@@ -15,8 +15,7 @@ import {
     EyeIcon
 } from '../components/icons';
 
-declare const pdfjsLib: any;
-declare const download: any;
+import { canvasToBlob, clearCanvas, downloadFile as download, parsePageRange, pdfError, renderPdfPage, withPdf } from './pdfRuntime';
 
 type ImageFormat = 'png' | 'jpeg' | 'webp';
 type QualityScale = 1 | 2 | 3;
@@ -24,8 +23,8 @@ type QualityScale = 1 | 2 | 3;
 interface ExtractedPage {
     id: string;
     pageNumber: number;
-    pdfFileName: string;
-    dataUrl: string;
+    url: string;
+    format: ImageFormat;
     blob: Blob;
     width: number;
     height: number;
@@ -74,62 +73,38 @@ const PdfToImage: React.FC = () => {
         setCustomRangeText('');
     };
 
-    const onFilesSelected = useCallback(async (selectedFiles: File[]) => {
-        if (selectedFiles.length > 0) {
-            const selectedPdf = selectedFiles[0];
-            resetState();
-            setFile(selectedPdf);
+    useEffect(() => () => {
+        extractedPages.forEach(page => URL.revokeObjectURL(page.url));
+    }, [extractedPages]);
 
-            // Peek at page count
-            try {
-                const arrayBuffer = await selectedPdf.arrayBuffer();
-                const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-                setTotalPages(pdfDoc.numPages);
-            } catch (err: any) {
-                console.error(err);
-                setError('تعذر قراءة ملف PDF. تأكد من أن الملف سليم وغير محمي بكلمة مرور.');
-            }
+    const outputFormat = extractedPages[0]?.format ?? imageFormat;
+    const baseName = file?.name.replace(/\.pdf$/i, '').trim() || 'document';
+
+    async function onFilesSelected(files: File[]) {
+        const selectedPdf = files[0];
+        if (!selectedPdf) return;
+        resetState();
+        setFile(selectedPdf);
+        setIsLoading(true);
+        setLoadingMessage('جاري قراءة عدد الصفحات…');
+        try {
+            setTotalPages(await withPdf(selectedPdf, async pdf => pdf.numPages));
+        } catch (error) {
+            setError(pdfError(error, 'تعذّر قراءة ملف PDF. اختر ملفاً سليماً.'));
+        } finally {
+            setIsLoading(false);
         }
-    }, []);
+    }
 
-    // Parse custom page ranges (e.g. "1, 3-5, 8")
-    const getTargetPagesList = (maxPages: number): number[] => {
-        if (pageRangeMode === 'all' || !customRangeText.trim()) {
-            return Array.from({ length: maxPages }, (_, i) => i + 1);
-        }
-
-        const pagesSet = new Set<number>();
-        const parts = customRangeText.split(/[,،]/);
-
-        for (const part of parts) {
-            const trimmed = part.trim();
-            if (trimmed.includes('-')) {
-                const [startStr, endStr] = trimmed.split('-');
-                const start = parseInt(startStr, 10);
-                const end = parseInt(endStr, 10);
-                if (!isNaN(start) && !isNaN(end)) {
-                    const min = Math.max(1, Math.min(start, end));
-                    const max = Math.min(maxPages, Math.max(start, end));
-                    for (let p = min; p <= max; p++) {
-                        pagesSet.add(p);
-                    }
-                }
-            } else {
-                const pageNum = parseInt(trimmed, 10);
-                if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= maxPages) {
-                    pagesSet.add(pageNum);
-                }
-            }
-        }
-
-        const sorted = Array.from(pagesSet).sort((a, b) => a - b);
-        return sorted.length > 0 ? sorted : Array.from({ length: maxPages }, (_, i) => i + 1);
-    };
-
-    // Main conversion routine: extracts pages into images
-    const handleExtractPages = async () => {
-        if (!file) {
-            setError('يرجى اختيار ملف PDF أولاً.');
+    async function handleExtractPages() {
+        if (!file || !totalPages) return;
+        let targets: number[];
+        try {
+            targets = pageRangeMode === 'all'
+                ? Array.from({ length: totalPages }, (_, index) => index + 1)
+                : parsePageRange(customRangeText, totalPages);
+        } catch (error) {
+            setError(error instanceof Error ? error.message : 'نطاق الصفحات غير صالح.');
             return;
         }
 
@@ -137,242 +112,147 @@ const PdfToImage: React.FC = () => {
         setError(null);
         setSuccessMessage(null);
         setExtractedPages([]);
-        setLoadingMessage('جاري تحميل وقراءة صفحات مستند PDF...');
-        setProgressPercent(5);
-
+        setSelectedPageForModal(null);
+        setLoadingMessage('جاري تحويل صفحات الملف…');
+        setProgressPercent(0);
+        const results: ExtractedPage[] = [];
         try {
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-            const numPages = pdfDoc.numPages;
-            setTotalPages(numPages);
-
-            const targetPages = getTargetPagesList(numPages);
-            const extractedResults: ExtractedPage[] = [];
-
-            const mimeType = imageFormat === 'jpeg' ? 'image/jpeg' : imageFormat === 'webp' ? 'image/webp' : 'image/png';
-            const qualityRatio = imageFormat === 'jpeg' || imageFormat === 'webp' ? 0.92 : undefined;
-
-            for (let idx = 0; idx < targetPages.length; idx++) {
-                const pageNum = targetPages[idx];
-                const currentPercent = Math.round(10 + ((idx + 1) / targetPages.length) * 80);
-                setLoadingMessage(`جاري تحويل الصفحة ${pageNum} من ${numPages} (${idx + 1} من ${targetPages.length})...`);
-                setProgressPercent(currentPercent);
-
-                const page = await pdfDoc.getPage(pageNum);
-                const viewport = page.getViewport({ scale: qualityScale });
-
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
-                const context = canvas.getContext('2d');
-
-                if (!context) {
-                    throw new Error('فشل إنشاء سياق الرسم للصفحة.');
+            await withPdf(file, async pdf => {
+                for (const [index, number] of targets.entries()) {
+                    setLoadingMessage(`تحويل صفحة ${number} (${index + 1} من ${targets.length})…`);
+                    const page = await pdf.getPage(number);
+                    const canvas = await renderPdfPage(page, qualityScale);
+                    try {
+                        const blob = await canvasToBlob(canvas, `image/${imageFormat}`, 0.92);
+                        results.push({
+                            id: String(number),
+                            pageNumber: number,
+                            url: URL.createObjectURL(blob),
+                            format: imageFormat,
+                            blob,
+                            width: canvas.width,
+                            height: canvas.height,
+                            sizeFormatted: formatBytes(blob.size),
+                        });
+                        setProgressPercent(Math.round((index + 1) / targets.length * 100));
+                    } finally {
+                        clearCanvas(canvas);
+                        page.cleanup();
+                    }
                 }
-
-                // White background for JPEG / standard readability
-                context.fillStyle = '#ffffff';
-                context.fillRect(0, 0, canvas.width, canvas.height);
-
-                await page.render({ canvasContext: context, viewport }).promise;
-
-                const dataUrl = canvas.toDataURL(mimeType, qualityRatio);
-                const blob = await (await fetch(dataUrl)).blob();
-
-                extractedResults.push({
-                    id: `page-${pageNum}-${Date.now()}-${Math.random()}`,
-                    pageNumber: pageNum,
-                    pdfFileName: file.name,
-                    dataUrl,
-                    blob,
-                    width: Math.round(viewport.width),
-                    height: Math.round(viewport.height),
-                    sizeFormatted: formatBytes(blob.size)
-                });
-            }
-
-            setExtractedPages(extractedResults);
-            setProgressPercent(100);
-            setSuccessMessage(`تم تحويل ${extractedResults.length} صفحة بنجاح إلى صور فائقة الدقة! يمكنك الآن اختيار طريقة التحميل.`);
-        } catch (err: any) {
-            console.error(err);
-            setError(`حدث خطأ أثناء تحويل الملف: ${err?.message || 'تأكد من أن الملف سليم'}`);
+            });
+            setExtractedPages(results);
+            setSuccessMessage(`تم تحويل ${results.length} صفحة. اختر طريقة التنزيل.`);
+        } catch (error) {
+            results.forEach(page => URL.revokeObjectURL(page.url));
+            setError(pdfError(error, 'تعذّر تحويل الصفحات إلى صور. جرّب دقة أقل أو صيغة أخرى.'));
         } finally {
             setIsLoading(false);
             setProgressPercent(null);
         }
-    };
+    }
 
-    // Action 1: Download all extracted images packed in a ZIP archive (.zip)
-    const handleDownloadZip = async () => {
-        if (extractedPages.length === 0) return;
+    async function handleDownloadZip() {
+        if (!extractedPages.length) return;
         setIsLoading(true);
         setError(null);
-        setSuccessMessage(null);
-        setLoadingMessage('جاري ضغط الصور وحفظها في أرشيف ZIP...');
-        setProgressPercent(15);
-
+        setLoadingMessage('جاري تجهيز ملف ZIP…');
         try {
             const zip = new JSZip();
-            const baseDocName = file ? file.name.replace(/\.pdf$/i, '').trim() : 'document_pages';
-
-            for (let i = 0; i < extractedPages.length; i++) {
-                const page = extractedPages[i];
-                const pageFileName = `${baseDocName}_page_${String(page.pageNumber).padStart(2, '0')}.${imageFormat}`;
-                zip.file(pageFileName, page.blob);
-                setProgressPercent(Math.round(20 + ((i + 1) / extractedPages.length) * 60));
+            for (const page of extractedPages) {
+                zip.file(`${baseName}_page_${String(page.pageNumber).padStart(2, '0')}.${page.format}`, await page.blob.arrayBuffer());
             }
-
-            setLoadingMessage('جاري إنشاء ملف ZIP المضغوط للتحميل...');
-            const zipBlob = await zip.generateAsync({
-                type: 'blob',
-                compression: 'DEFLATE',
-                compressionOptions: { level: 6 }
-            });
-
-            download(zipBlob, `${baseDocName}_images_bundle.zip`, 'application/zip');
-            setProgressPercent(100);
-            setSuccessMessage(`تم إنشاء وتحميل ملف الـ ZIP المضغوط (${extractedPages.length} صورة) بنجاح!`);
-        } catch (err: any) {
-            console.error(err);
-            setError(`فشل في إنشاء ملف ZIP: ${err?.message || 'خطأ'}`);
+            const blob = await zip.generateAsync({ type: 'blob' }, update => setProgressPercent(Math.round(update.percent)));
+            download(blob, `${baseName}_images.zip`, 'application/zip');
+        } catch {
+            setError('تعذّر تجهيز أرشيف ZIP.');
         } finally {
             setIsLoading(false);
             setProgressPercent(null);
         }
-    };
+    }
 
-    // Action 2: Download as ONE combined merged image (Stitched vertical strip)
-    const handleDownloadCombinedStitchedImage = async () => {
-        if (extractedPages.length === 0) return;
+    async function handleDownloadCombinedStitchedImage() {
+        if (!extractedPages.length) return;
         setIsLoading(true);
         setError(null);
-        setSuccessMessage(null);
-        setLoadingMessage('جاري دمج جميع صفحات الصور في صورة مدمجة واحدة فائقة الطول...');
-        setProgressPercent(20);
-
+        setLoadingMessage('جاري جمع الصفحات في صورة واحدة…');
+        const canvas = document.createElement('canvas');
         try {
-            // Calculate total height and max width
-            const maxWidth = Math.max(...extractedPages.map(p => p.width));
-            const totalHeight = extractedPages.reduce((sum, p) => sum + p.height, 0);
-
-            const canvas = document.createElement('canvas');
-            canvas.width = maxWidth;
-            canvas.height = totalHeight;
-            const ctx = canvas.getContext('2d');
-
-            if (!ctx) {
-                throw new Error('تعذر إنشاء سياق رسم للصورة المدمجة.');
+            const maxWidth = Math.max(...extractedPages.map(page => page.width));
+            const totalHeight = extractedPages.reduce((sum, page) => sum + page.height, 0);
+            const scale = Math.min(1, 8192 / Math.max(maxWidth, totalHeight), Math.sqrt(12_000_000 / (maxWidth * totalHeight)));
+            if (scale < 0.2) throw new Error('حجم الصورة المدمجة كبير. نزّل الصفحات في ZIP أو اختر عدداً أقل.');
+            canvas.width = Math.ceil(maxWidth * scale);
+            canvas.height = Math.ceil(totalHeight * scale);
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('تعذّر تجهيز الصورة المدمجة.');
+            context.fillStyle = '#fff';
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            let y = 0;
+            for (const [index, page] of extractedPages.entries()) {
+                const image = new Image();
+                image.src = page.url;
+                await image.decode();
+                context.drawImage(image, (maxWidth - page.width) * scale / 2, y, page.width * scale, page.height * scale);
+                y += page.height * scale;
+                setProgressPercent(Math.round((index + 1) / extractedPages.length * 100));
             }
-
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            let currentY = 0;
-            for (let i = 0; i < extractedPages.length; i++) {
-                const page = extractedPages[i];
-                setLoadingMessage(`جاري دمج صفحة ${page.pageNumber} (${i + 1} من ${extractedPages.length})...`);
-                
-                // Load image into HTMLImageElement
-                const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-                    const el = new Image();
-                    el.onload = () => resolve(el);
-                    el.onerror = reject;
-                    el.src = page.dataUrl;
-                });
-
-                // Center if width is less than maxWidth
-                const xOffset = Math.round((maxWidth - page.width) / 2);
-                ctx.drawImage(img, xOffset, currentY, page.width, page.height);
-                currentY += page.height;
-
-                setProgressPercent(Math.round(25 + ((i + 1) / extractedPages.length) * 65));
-            }
-
-            const mimeType = imageFormat === 'jpeg' ? 'image/jpeg' : imageFormat === 'webp' ? 'image/webp' : 'image/png';
-            const combinedDataUrl = canvas.toDataURL(mimeType, 0.92);
-            const combinedBlob = await (await fetch(combinedDataUrl)).blob();
-
-            const baseDocName = file ? file.name.replace(/\.pdf$/i, '').trim() : 'document';
-            download(combinedBlob, `${baseDocName}_combined_merged_image.${imageFormat}`, mimeType);
-
-            setProgressPercent(100);
-            setSuccessMessage(`تم دمج جميع الصور في ملف صورة واحدة مدمجة (${extractedPages.length} صفحة) بنجاح!`);
-        } catch (err: any) {
-            console.error(err);
-            setError(`فشل في إنشاء الصورة المدمجة: ${err?.message || 'خطأ'}`);
+            const mime = `image/${outputFormat}`;
+            download(await canvasToBlob(canvas, mime, 0.92), `${baseName}_combined.${outputFormat}`, mime);
+            setSuccessMessage(scale < 1 ? 'تم تنزيل الصورة المدمجة بأبعاد مناسبة للمتصفح.' : 'تم تنزيل الصورة المدمجة.');
+        } catch (error) {
+            setError(error instanceof Error ? error.message : 'تعذّر تجهيز الصورة المدمجة.');
         } finally {
+            clearCanvas(canvas);
             setIsLoading(false);
             setProgressPercent(null);
         }
-    };
+    }
 
-    // Action 3: Download a single page image
-    const handleDownloadSingleImage = (page: ExtractedPage) => {
-        const baseDocName = file ? file.name.replace(/\.pdf$/i, '').trim() : 'page';
-        const mimeType = imageFormat === 'jpeg' ? 'image/jpeg' : imageFormat === 'webp' ? 'image/webp' : 'image/png';
-        download(page.blob, `${baseDocName}_page_${page.pageNumber}.${imageFormat}`, mimeType);
-        setSuccessMessage(`تم تحميل صورة الصفحة ${page.pageNumber} بنجاح!`);
-    };
+    function handleDownloadSingleImage(page: ExtractedPage) {
+        download(page.blob, `${baseName}_page_${page.pageNumber}.${page.format}`, page.blob.type);
+    }
 
-    // Action 4: Download all individual images one by one
-    const handleDownloadAllIndividual = async () => {
-        if (extractedPages.length === 0) return;
+    async function handleDownloadAllIndividual() {
+        if (!extractedPages.length) return;
         setIsLoading(true);
         setError(null);
-        setSuccessMessage(null);
-
         try {
-            const baseDocName = file ? file.name.replace(/\.pdf$/i, '').trim() : 'page';
-            const mimeType = imageFormat === 'jpeg' ? 'image/jpeg' : imageFormat === 'webp' ? 'image/webp' : 'image/png';
-
-            for (let i = 0; i < extractedPages.length; i++) {
-                const page = extractedPages[i];
-                setLoadingMessage(`جاري تنزيل الصورة ${i + 1} من ${extractedPages.length} (صفحة ${page.pageNumber})...`);
-                download(page.blob, `${baseDocName}_page_${page.pageNumber}.${imageFormat}`, mimeType);
-                await new Promise(r => setTimeout(r, 450));
+            for (const [index, page] of extractedPages.entries()) {
+                setLoadingMessage(`تنزيل الصورة ${index + 1} من ${extractedPages.length}…`);
+                handleDownloadSingleImage(page);
+                if (index < extractedPages.length - 1) await new Promise(resolve => setTimeout(resolve, 300));
             }
-
-            setSuccessMessage(`تم تحميل جميع الصور المنفردة (${extractedPages.length} صورة) بنجاح!`);
-        } catch (err: any) {
-            console.error(err);
-            setError(`حدث خطأ أثناء تنزيل الصور: ${err?.message || 'خطأ'}`);
+            setSuccessMessage('أُرسلت طلبات تنزيل الصور. إذا أوقفها المتصفح، استخدم ZIP.');
         } finally {
             setIsLoading(false);
         }
-    };
+    }
 
-    // Copy image to clipboard
-    const handleCopyImageToClipboard = async (page: ExtractedPage, index: number) => {
+    async function handleCopyImageToClipboard(page: ExtractedPage, index: number) {
         try {
-            // PNG blobs are supported by navigator.clipboard.write
-            let blobToCopy = page.blob;
-            if (blobToCopy.type !== 'image/png') {
+            const clipboardBlob = page.blob.type === 'image/png' ? page.blob : (async () => {
+                const image = new Image();
+                image.src = page.url;
+                await image.decode();
                 const canvas = document.createElement('canvas');
                 canvas.width = page.width;
                 canvas.height = page.height;
-                const ctx = canvas.getContext('2d');
-                if (ctx) {
-                    const img = new Image();
-                    img.src = page.dataUrl;
-                    await new Promise(r => { img.onload = r; });
-                    ctx.drawImage(img, 0, 0);
-                    blobToCopy = await new Promise(r => canvas.toBlob(b => r(b!), 'image/png'));
+                try {
+                    const context = canvas.getContext('2d');
+                    if (!context) throw new Error('Canvas unavailable');
+                    context.drawImage(image, 0, 0);
+                    return await canvasToBlob(canvas);
+                } finally {
+                    clearCanvas(canvas);
                 }
-            }
-
-            if (navigator.clipboard && (window as any).ClipboardItem) {
-                await navigator.clipboard.write([
-                    new (window as any).ClipboardItem({ 'image/png': blobToCopy })
-                ]);
-                setCopiedIndex(index);
-                setTimeout(() => setCopiedIndex(null), 2500);
-            } else {
-                handleDownloadSingleImage(page);
-            }
-        } catch (err) {
-            console.warn('Clipboard write failed, fallback to download:', err);
-            handleDownloadSingleImage(page);
+            })();
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': clipboardBlob })]);
+            setCopiedIndex(index);
+            setTimeout(() => setCopiedIndex(null), 2500);
+        } catch {
+            setError('تعذّر النسخ إلى الحافظة. استخدم زر تنزيل الصورة.');
         }
     };
 
@@ -393,7 +273,7 @@ const PdfToImage: React.FC = () => {
 
             {/* Error & Success Messages */}
             {error && (
-                <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-medium flex items-center gap-3 animate-fade-in">
+                <div role="alert" className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-sm font-medium flex items-center gap-3 animate-fade-in">
                     <span className="text-lg">⚠️</span>
                     <p className="flex-1">{error}</p>
                     <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-700 text-xs">إغلاق</button>
@@ -433,6 +313,7 @@ const PdfToImage: React.FC = () => {
                                 </p>
                             </div>
                             <button
+                                disabled={isLoading}
                                 onClick={resetState}
                                 className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition self-start sm:self-center"
                             >
@@ -545,6 +426,7 @@ const PdfToImage: React.FC = () => {
                                 {pageRangeMode === 'custom' && (
                                     <input 
                                         type="text" 
+                                        aria-label="نطاق الصفحات"
                                         placeholder="مثال: 1, 3-5, 8"
                                         value={customRangeText}
                                         onChange={(e) => setCustomRangeText(e.target.value)}
@@ -558,7 +440,7 @@ const PdfToImage: React.FC = () => {
                         <div className="pt-2">
                             <button
                                 onClick={handleExtractPages}
-                                disabled={isLoading}
+                                disabled={isLoading || !totalPages}
                                 className="w-full sm:w-auto px-8 py-3.5 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-sm rounded-2xl shadow-lg shadow-indigo-500/25 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                             >
                                 <SparklesIcon className="w-5 h-5" />
@@ -623,7 +505,7 @@ const PdfToImage: React.FC = () => {
                                                 تحميل الكل كملف ZIP
                                             </h4>
                                             <p className="text-xs text-purple-200 leading-relaxed">
-                                                يجمع جميع الصور بصيغة {imageFormat.toUpperCase()} داخل أرشيف ZIP مضغوط بنقرة واحدة.
+                                                يجمع جميع الصور بصيغة {outputFormat.toUpperCase()} داخل أرشيف ZIP مضغوط بنقرة واحدة.
                                             </p>
                                         </div>
                                         <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs font-bold text-purple-100 group-hover:text-white">
@@ -679,7 +561,7 @@ const PdfToImage: React.FC = () => {
                                                 تحميل جميع الصور مفردة
                                             </h4>
                                             <p className="text-xs text-emerald-200 leading-relaxed">
-                                                تنزيل كل صفحة كملف صورة منفصل ({imageFormat.toUpperCase()}) بالتتابع.
+                                                تنزيل كل صفحة كملف صورة منفصل ({outputFormat.toUpperCase()}) بالتتابع.
                                             </p>
                                         </div>
                                         <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs font-bold text-emerald-100 group-hover:text-white">
@@ -702,7 +584,7 @@ const PdfToImage: React.FC = () => {
                                         </p>
                                     </div>
                                     <span className="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg">
-                                        الصيغة: {imageFormat.toUpperCase()}
+                                        الصيغة: {outputFormat.toUpperCase()}
                                     </span>
                                 </div>
 
@@ -715,7 +597,7 @@ const PdfToImage: React.FC = () => {
                                             {/* Thumbnail with overlay controls */}
                                             <div className="relative aspect-[3/4] bg-white rounded-xl overflow-hidden border border-slate-200 shadow-inner flex items-center justify-center">
                                                 <img 
-                                                    src={page.dataUrl} 
+                                                    src={page.url}
                                                     alt={`الصفحة ${page.pageNumber}`} 
                                                     className="w-full h-full object-contain cursor-pointer"
                                                     onClick={() => setSelectedPageForModal(page)}
@@ -747,7 +629,7 @@ const PdfToImage: React.FC = () => {
                                             <div className="pt-2 border-t border-slate-200/80 flex items-center gap-1.5">
                                                 <button
                                                     onClick={() => handleDownloadSingleImage(page)}
-                                                    title={`تحميل صفحة ${page.pageNumber} (${imageFormat.toUpperCase()})`}
+                                                    title={`تحميل صفحة ${page.pageNumber} (${outputFormat.toUpperCase()})`}
                                                     className="flex-1 py-1.5 px-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 shadow-sm"
                                                 >
                                                     <ArrowDownTrayIcon className="w-3.5 h-3.5" />
@@ -811,7 +693,7 @@ const PdfToImage: React.FC = () => {
                         </div>
                         <div className="p-4 overflow-auto max-h-[75vh] flex items-center justify-center bg-slate-100">
                             <img 
-                                src={selectedPageForModal.dataUrl} 
+                                src={selectedPageForModal.url}
                                 alt={`الصفحة ${selectedPageForModal.pageNumber}`}
                                 className="max-w-full max-h-full object-contain rounded-lg shadow-sm"
                             />

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { ChevronDownIcon, ChevronUpIcon } from '../../components/icons';
 import { editPageOrder, type PageOperation } from './pdfOperations';
+import { parsePageRange } from '../pdfRuntime';
 import PdfPagePreview from './PdfPagePreview';
-import { PdfDownload, PdfWorkspace, outputFilename, secondaryButton, type OpenPdf } from './PdfWorkspace';
+import { PdfDownload, PdfWorkspace, outputFilename, field, secondaryButton, type OpenPdf } from './PdfWorkspace';
 
 const descriptions: Record<PageOperation, string> = {
     delete: 'حدّد الصفحات التي تريد حذفها. يجب أن تبقى صفحة واحدة على الأقل.',
@@ -15,6 +16,9 @@ function OrganizePages({ file, operation }: { file: OpenPdf; operation: PageOper
     const [order, setOrder] = useState(originalOrder);
     const [selected, setSelected] = useState(() => new Set<number>());
     const [preview, setPreview] = useState(0);
+    const [pageRange, setPageRange] = useState('');
+    const [targetPosition, setTargetPosition] = useState('');
+    const [selectionError, setSelectionError] = useState('');
     const isReordering = operation === 'reorder';
     const output = isReordering ? order : originalOrder.filter(index => selected.has(index) === (operation === 'extract'));
     const canDownload = isReordering
@@ -22,6 +26,7 @@ function OrganizePages({ file, operation }: { file: OpenPdf; operation: PageOper
         : selected.size > 0 && output.length > 0;
 
     function toggle(index: number, checked: boolean) {
+        setSelectionError('');
         setSelected(current => {
             const next = new Set(current);
             if (checked) next.add(index);
@@ -31,13 +36,34 @@ function OrganizePages({ file, operation }: { file: OpenPdf; operation: PageOper
         setPreview(index);
     }
 
-    function move(position: number, offset: number) {
+    function move(position: number, destination: number) {
         const next = [...order];
-        const index = next[position];
-        next[position] = next[position + offset];
-        next[position + offset] = index;
+        const [index] = next.splice(position, 1);
+        next.splice(destination, 0, index);
         setOrder(next);
+        setSelectionError('');
         setPreview(index);
+    }
+
+    function applyRange() {
+        try {
+            const indices = parsePageRange(pageRange, originalOrder.length).map(page => page - 1);
+            setSelected(new Set(indices));
+            setPreview(indices[0]);
+            setSelectionError('');
+        } catch (error) {
+            setSelectionError(error instanceof Error ? error.message : 'نطاق الصفحات غير صالح.');
+        }
+    }
+
+    function goToPosition() {
+        const newIndex = Number(targetPosition) - 1;
+        if (!Number.isInteger(newIndex) || newIndex < 0 || newIndex >= order.length) {
+            setSelectionError(`أدخل موضعاً صحيحاً من 1 إلى ${order.length}.`);
+            return;
+        }
+        move(order.indexOf(preview), newIndex);
+        setTargetPosition('');
     }
 
     return (
@@ -56,10 +82,28 @@ function OrganizePages({ file, operation }: { file: OpenPdf; operation: PageOper
                                 {operation === 'extract' && (
                                     <button type="button" className={secondaryButton} disabled={selected.size === order.length} onClick={() => setSelected(new Set(order))}>تحديد الكل</button>
                                 )}
-                                <button type="button" className={secondaryButton} disabled={!selected.size} onClick={() => setSelected(new Set())}>إلغاء التحديد</button>
+                                <button type="button" className={secondaryButton} disabled={!selected.size} onClick={() => { setSelected(new Set()); setPageRange(''); setSelectionError(''); }}>إلغاء التحديد</button>
                             </>
                         )}
                     </div>
+                    {isReordering ? (
+                        <form className="flex flex-wrap items-end gap-2" onSubmit={event => { event.preventDefault(); goToPosition(); }}>
+                            <label className="min-w-0 flex-1 space-y-1 text-sm font-bold text-slate-800">
+                                <span>نقل الصفحة {preview + 1} إلى الموضع</span>
+                                <input type="number" min="1" max={order.length} value={targetPosition} className={field} onChange={event => setTargetPosition(event.currentTarget.value)} />
+                            </label>
+                            <button className={secondaryButton} disabled={order.length < 2 || !targetPosition}>نقل</button>
+                        </form>
+                    ) : (
+                        <form className="flex flex-wrap items-end gap-2" onSubmit={event => { event.preventDefault(); applyRange(); }}>
+                            <label className="min-w-0 flex-1 space-y-1 text-sm font-bold text-slate-800">
+                                <span>تحديد الصفحات بالأرقام</span>
+                                <input dir="ltr" placeholder="1, 3-5" value={pageRange} className={field} onChange={event => setPageRange(event.currentTarget.value)} />
+                            </label>
+                            <button className={secondaryButton} disabled={!pageRange.trim()}>تحديد</button>
+                        </form>
+                    )}
+                    {selectionError && <p role="alert" className="text-sm font-bold text-red-700">{selectionError}</p>}
                     <ol aria-label="صفحات المستند" className="max-h-96 space-y-2 overflow-auto rounded-2xl border border-slate-200 p-2">
                         {order.map((index, position) => (
                             <li key={index} className={`flex flex-wrap items-center gap-2 rounded-lg p-2 ${preview === index ? 'bg-blue-50' : 'bg-slate-50'}`}>
@@ -85,10 +129,10 @@ function OrganizePages({ file, operation }: { file: OpenPdf; operation: PageOper
                                 </button>
                                 {isReordering && (
                                     <div className="flex shrink-0 gap-1">
-                                        <button type="button" className={secondaryButton} aria-label={`تحريك الصفحة ${index + 1} لأعلى`} disabled={position === 0} onClick={() => move(position, -1)}>
+                                        <button type="button" className={secondaryButton} aria-label={`تحريك الصفحة ${index + 1} لأعلى`} disabled={position === 0} onClick={() => move(position, position - 1)}>
                                             <ChevronUpIcon className="h-4 w-4" />
                                         </button>
-                                        <button type="button" className={secondaryButton} aria-label={`تحريك الصفحة ${index + 1} لأسفل`} disabled={position === order.length - 1} onClick={() => move(position, 1)}>
+                                        <button type="button" className={secondaryButton} aria-label={`تحريك الصفحة ${index + 1} لأسفل`} disabled={position === order.length - 1} onClick={() => move(position, position + 1)}>
                                             <ChevronDownIcon className="h-4 w-4" />
                                         </button>
                                     </div>

@@ -5,6 +5,12 @@ export type PageOperation = 'delete' | 'extract' | 'reorder';
 export async function editPageOrder(bytes: Uint8Array, operation: PageOperation, indices: number[]) {
     const { PDFDocument, PDFName } = await import('pdf-lib');
     const source = await PDFDocument.load(bytes, { updateMetadata: false });
+    const count = source.getPageCount();
+    if (!indices.length || new Set(indices).size !== indices.length
+        || indices.some(index => !Number.isInteger(index) || index < 0 || index >= count)
+        || (operation === 'reorder' && indices.length !== count)) {
+        throw new Error('Invalid PDF page selection');
+    }
 
     if (operation === 'reorder') {
         const originalPages = source.getPages();

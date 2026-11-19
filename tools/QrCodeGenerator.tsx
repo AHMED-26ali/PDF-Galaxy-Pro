@@ -22,11 +22,38 @@ import {
     ArrowRightIcon
 } from '../components/icons';
 
-declare const PDFLib: any;
-declare const pdfjsLib: any;
-declare const download: any;
+import { canvasToBlob, clearCanvas, downloadFile as download, pdfError, renderPdfPage, withPdf } from './pdfRuntime';
+import { getVisiblePage } from './pdf-pages/pdfOperations';
 
 type QrContentType = 'url' | 'whatsapp' | 'wifi' | 'text' | 'vcard' | 'email' | 'phone';
+
+function escapeQrField(text: string) {
+    return text.replace(/[\\;,:"\n\r]/g, character => character === '\n' || character === '\r' ? '\\n' : '\\' + character);
+}
+
+function publicUrl(text: string) {
+    try {
+        const url = new URL(text.trim());
+        return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+    } catch {
+        return '';
+    }
+}
+
+function qrPhone(text: string) {
+    return text.replace(/[٠-٩۰-۹]/g, digit => String(digit.charCodeAt(0) & 15)).replace(/[^\d]/g, '');
+}
+
+function stampRectangle(
+    view: { width: number; height: number }, position: string, size: number, margin: number,
+) {
+    const edge = Math.min(margin, Math.min(view.width, view.height) / 4);
+    const length = Math.min(size, view.width - edge * 2, view.height - edge * 2);
+    const left = position.endsWith('right') ? view.width - length - edge
+        : position.endsWith('center') ? (view.width - length) / 2 : edge;
+    const top = position.startsWith('top') ? edge : view.height - length - edge;
+    return { left, top, length };
+}
 
 const QrCodeGenerator: React.FC = () => {
     // Mode
@@ -89,6 +116,9 @@ const QrCodeGenerator: React.FC = () => {
 
     const [copied, setCopied] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [qrError, setQrError] = useState('');
+    const [qrReady, setQrReady] = useState(false);
+    const [qrPreview, setQrPreview] = useState('');
 
     // --- STAMPING ON EXISTING PDF STATE ---
     const [stampPdfFile, setStampPdfFile] = useState<File | null>(null);
@@ -97,7 +127,8 @@ const QrCodeGenerator: React.FC = () => {
     const [stampPosition, setStampPosition] = useState<'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'bottom-center'>('bottom-left');
     const [stampSizePx, setStampSizePx] = useState(100);
     const [stampMarginPx, setStampMarginPx] = useState(25);
-    const [stampPagePreviewUrl, setStampPagePreviewUrl] = useState<string | null>(null);
+    const [stampPreview, setStampPreview] = useState<{ file: File; page: number; url: string; width: number; height: number } | null>(null);
+    const [stampError, setStampError] = useState('');
     const [isStamping, setIsStamping] = useState(false);
 
     // --- SCAN QR FROM IMAGE STATE ---
@@ -108,138 +139,118 @@ const QrCodeGenerator: React.FC = () => {
     const [isScanning, setIsScanning] = useState(false);
     const [scanCopied, setScanCopied] = useState(false);
 
-    // Calculate final QR payload
     const getQrPayload = useCallback((): string => {
         switch (contentType) {
             case 'url':
-                return urlInput.trim() || 'https://example.com';
+                return publicUrl(urlInput);
             case 'text':
-                return textInput.trim() || 'مرحباً بكم';
+                return textInput.trim();
             case 'whatsapp': {
-                const cleanPhone = waPhone.replace(/[^\d+]/g, '');
-                const encodedMsg = encodeURIComponent(waMessage.trim());
-                return `https://wa.me/${cleanPhone}${encodedMsg ? `?text=${encodedMsg}` : ''}`;
+                const phone = qrPhone(waPhone);
+                return /^[1-9]\d{6,14}$/.test(phone)
+                    ? `https://wa.me/${phone}${waMessage.trim() ? '?text=' + encodeURIComponent(waMessage.trim()) : ''}`
+                    : '';
             }
             case 'wifi':
-                return `WIFI:T:${wifiType};S:${wifiSsid};P:${wifiPass};H:${wifiHidden ? 'true' : 'false'};;`;
+                return wifiSsid.trim() && (wifiType === 'nopass' || wifiPass)
+                    ? `WIFI:T:${wifiType};S:${escapeQrField(wifiSsid)};${wifiType === 'nopass' ? '' : 'P:' + escapeQrField(wifiPass) + ';'}H:${wifiHidden};;`
+                    : '';
             case 'vcard':
-                return [
+                return vcardName.trim() ? [
                     'BEGIN:VCARD',
                     'VERSION:3.0',
-                    `FN:${vcardName}`,
-                    vcardPhone ? `TEL:${vcardPhone}` : '',
-                    vcardEmail ? `EMAIL:${vcardEmail}` : '',
-                    vcardOrg ? `ORG:${vcardOrg}` : '',
-                    'END:VCARD'
-                ].filter(Boolean).join('\n');
+                    `N:${escapeQrField(vcardName)};;;;`,
+                    `FN:${escapeQrField(vcardName)}`,
+                    vcardPhone ? `TEL:${escapeQrField(vcardPhone)}` : '',
+                    vcardEmail ? `EMAIL:${escapeQrField(vcardEmail)}` : '',
+                    vcardOrg ? `ORG:${escapeQrField(vcardOrg)}` : '',
+                    'END:VCARD',
+                ].filter(Boolean).join('\r\n') : '';
             case 'email':
-                return `mailto:${emailTo}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-            case 'phone':
-                return `tel:${phoneNum.replace(/[^\d+]/g, '')}`;
-            default:
-                return 'https://example.com';
+                return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTo.trim())
+                    ? `mailto:${encodeURI(emailTo.trim())}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}` : '';
+            case 'phone': {
+                const phone = qrPhone(phoneNum);
+                return phone ? `tel:${phoneNum.trim().startsWith('+') ? '+' : ''}${phone}` : '';
+            }
         }
     }, [contentType, urlInput, textInput, waPhone, waMessage, wifiSsid, wifiPass, wifiType, wifiHidden, vcardName, vcardPhone, vcardEmail, vcardOrg, emailTo, emailSubject, emailBody, phoneNum]);
 
     const activeCornerColor = useCustomCornerColor ? cornerColor : fgColor;
 
-    // Initialize QRCodeStyling instance
     useEffect(() => {
-        const payload = getQrPayload();
-        const instance = new QRCodeStyling({
-            width: 260,
-            height: 260,
-            data: payload,
-            image: undefined, // No image in center
-            dotsOptions: {
-                color: fgColor,
-                type: dotType,
-            },
-            backgroundOptions: {
-                color: isTransparentBg ? 'transparent' : bgColor,
-            },
-            cornersSquareOptions: {
-                color: activeCornerColor,
-                type: cornerSquareType,
-            },
-            cornersDotOptions: {
-                color: activeCornerColor,
-                type: cornerDotType,
-            },
-            qrOptions: {
-                errorCorrectionLevel: errorLevel,
-            },
-        });
-
-        qrCodeRef.current = instance;
-
-        if (qrContainerRef.current) {
-            qrContainerRef.current.innerHTML = '';
-            instance.append(qrContainerRef.current);
-        }
-    }, []);
-
-    // Update QRCodeStyling on option changes
-    useEffect(() => {
-        if (!qrCodeRef.current) return;
-        const payload = getQrPayload();
-
-        qrCodeRef.current.update({
-            data: payload,
-            image: undefined, // Keep center completely clean
-            dotsOptions: {
-                color: fgColor,
-                type: dotType,
-            },
-            backgroundOptions: {
-                color: isTransparentBg ? 'transparent' : bgColor,
-            },
-            cornersSquareOptions: {
-                color: activeCornerColor,
-                type: cornerSquareType,
-            },
-            cornersDotOptions: {
-                color: activeCornerColor,
-                type: cornerDotType,
-            },
-            qrOptions: {
-                errorCorrectionLevel: errorLevel,
-            },
-        });
-    }, [getQrPayload, fgColor, bgColor, isTransparentBg, activeCornerColor, dotType, cornerSquareType, cornerDotType, errorLevel]);
-
-    // Download PNG
-    const handleDownloadPng = async () => {
-        if (!qrCodeRef.current) return;
-        const cleanTitle = (qrLabel || 'qrcode').replace(/[^\w\u0600-\u06FF]/g, '_');
-        await qrCodeRef.current.download({ name: cleanTitle, extension: 'png' });
-    };
-
-    // Download SVG
-    const handleDownloadSvg = async () => {
-        if (!qrCodeRef.current) return;
-        const cleanTitle = (qrLabel || 'qrcode').replace(/[^\w\u0600-\u06FF]/g, '_');
-        await qrCodeRef.current.download({ name: cleanTitle, extension: 'svg' });
-    };
-
-    // Copy PNG Image to Clipboard
-    const handleCopyImage = async () => {
-        if (!qrCodeRef.current) return;
+        const data = getQrPayload();
+        let active = true;
+        let previewUrl: string | undefined;
+        setQrError('');
+        setQrReady(false);
+        setQrPreview('');
+        qrCodeRef.current = null;
+        const container = qrContainerRef.current;
+        container?.replaceChildren();
+        if (!data) return;
         try {
-            const rawData = await qrCodeRef.current.getRawData('png');
-            if (rawData) {
-                const blob = new Blob([rawData], { type: 'image/png' });
-                await navigator.clipboard.write([
-                    new ClipboardItem({ 'image/png': blob }),
-                ]);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
+            const qr = new QRCodeStyling({
+                width: 400,
+                height: 400,
+                margin: 60,
+                type: 'svg',
+                data,
+                dotsOptions: { color: fgColor, type: dotType },
+                backgroundOptions: { color: isTransparentBg ? 'transparent' : bgColor },
+                cornersSquareOptions: { color: activeCornerColor, type: cornerSquareType },
+                cornersDotOptions: { color: activeCornerColor, type: cornerDotType },
+                qrOptions: { errorCorrectionLevel: errorLevel },
+            });
+            if (container) qr.append(container);
+            qrCodeRef.current = qr;
+            setQrReady(true);
+            if (activeTab === 'stamp') {
+                void qr.getRawData('png').then(blob => {
+                    if (active && blob instanceof Blob) {
+                        previewUrl = URL.createObjectURL(blob);
+                        setQrPreview(previewUrl);
+                    }
+                }).catch(() => {
+                    if (active) setQrError('تعذّر عرض معاينة الباركود.');
+                });
             }
-        } catch (e) {
-            console.error(e);
-            navigator.clipboard.writeText(getQrPayload());
+        } catch {
+            setQrError('تعذّر توليد الباركود. اختصر المحتوى أو قلّل مستوى تصحيح الخطأ.');
+        }
+        return () => {
+            active = false;
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+        };
+    }, [activeTab, getQrPayload, fgColor, bgColor, isTransparentBg, activeCornerColor, dotType, cornerSquareType, cornerDotType, errorLevel]);
+
+    async function getQrPng() {
+        const data = await qrCodeRef.current?.getRawData('png');
+        if (!(data instanceof Blob)) throw new Error('QR unavailable');
+        return data;
+    }
+
+    async function exportQr(extension: 'png' | 'svg') {
+        if (!qrCodeRef.current) return;
+        setQrError('');
+        try {
+            const data = await qrCodeRef.current.getRawData(extension);
+            if (!(data instanceof Blob)) throw new Error('QR unavailable');
+            const name = (qrLabel.trim() || 'qrcode').replace(/[^\w\u0600-\u06ff]/g, '_');
+            download(data, `${name}.${extension}`, data.type);
+        } catch {
+            setQrError('تعذّر تنزيل الباركود بالصيغة المختارة.');
+        }
+    }
+
+    const handleCopyImage = async () => {
+        setQrError('');
+        try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': getQrPng() })]);
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
+        } catch {
+            setQrError('تعذّر نسخ صورة الباركود. يمكنك تنزيلها بصيغة PNG.');
         }
     };
 
@@ -249,16 +260,13 @@ const QrCodeGenerator: React.FC = () => {
         setIsLoading(true);
 
         try {
-            const { PDFDocument, rgb } = PDFLib;
+            const { PDFDocument, rgb } = await import('pdf-lib');
             const pdfDoc = await PDFDocument.create();
 
             const page = pdfDoc.addPage([595.28, 841.89]);
             const { width, height } = page.getSize();
 
-            const rawData = await qrCodeRef.current.getRawData('png');
-            if (!rawData) throw new Error("Could not get QR png data");
-
-            const embeddedQr = await pdfDoc.embedPng(rawData);
+            const embeddedQr = await pdfDoc.embedPng(await (await getQrPng()).arrayBuffer());
             const qrCardSize = 280;
             const qrX = (width - qrCardSize) / 2;
             const qrY = height - 420;
@@ -290,12 +298,8 @@ const QrCodeGenerator: React.FC = () => {
                 ctxL.fillStyle = '#0f172a';
                 ctxL.textAlign = 'center';
                 ctxL.textBaseline = 'middle';
-                ctxL.fillText(titleToDraw, 300, 40);
-                const labelBytes = await new Promise<ArrayBuffer>((res) => {
-                    canvasLabel.toBlob(async (b) => {
-                        if (b) res(await b.arrayBuffer());
-                    }, 'image/png');
-                });
+                ctxL.fillText(titleToDraw, 300, 40, 580);
+                const labelBytes = await (await canvasToBlob(canvasLabel)).arrayBuffer();
                 const embeddedLabel = await pdfDoc.embedPng(labelBytes);
                 page.drawImage(embeddedLabel, {
                     x: (width - 300) / 2,
@@ -309,161 +313,119 @@ const QrCodeGenerator: React.FC = () => {
             const cleanTitle = (qrLabel || 'qrcode_card').replace(/[^\w\u0600-\u06FF]/g, '_');
             download(pdfBytes, `${cleanTitle}.pdf`, 'application/pdf');
 
-            setIsLoading(false);
-        } catch (e) {
-            console.error(e);
+        } catch {
+            setQrError('تعذّر تجهيز بطاقة PDF للطباعة.');
+        } finally {
             setIsLoading(false);
         }
     };
 
-    // Stamping on PDF
     const handleSelectStampPdf = (files: File[]) => {
-        if (files.length > 0) {
-            setStampPdfFile(files[0]);
-            setStampPage(1);
-        }
+        if (!files[0]) return;
+        setStampPdfFile(files[0]);
+        setStampPage(1);
+        setStampTotalPages(1);
+        setStampError('');
     };
 
     useEffect(() => {
-        if (!stampPdfFile) return;
-        let isMounted = true;
-
-        const loadPdf = async () => {
-            try {
-                const arrayBuffer = await stampPdfFile.arrayBuffer();
-                const doc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
-                if (!isMounted) return;
-                setStampTotalPages(doc.numPages);
-
-                const page = await doc.getPage(stampPage);
-                const viewport = page.getViewport({ scale: 1.0 });
-
-                const tempCanvas = document.createElement('canvas');
-                tempCanvas.width = viewport.width;
-                tempCanvas.height = viewport.height;
-                const ctx = tempCanvas.getContext('2d');
-                if (ctx) {
-                    await page.render({ canvasContext: ctx, viewport }).promise;
-                    if (isMounted) {
-                        setStampPagePreviewUrl(tempCanvas.toDataURL());
-                    }
-                }
-            } catch (err) {
-                console.error(err);
+        if (activeTab !== 'stamp' || !stampPdfFile) return;
+        let active = true;
+        setStampError('');
+        withPdf(stampPdfFile, async pdf => {
+            const page = await pdf.getPage(stampPage);
+            const size = page.getViewport({ scale: 1 });
+            const canvas = await renderPdfPage(page, 1.5, 900);
+            if (active) {
+                setStampTotalPages(pdf.numPages);
+                setStampPreview({ file: stampPdfFile, page: stampPage, url: canvas.toDataURL('image/png'), width: size.width, height: size.height });
             }
-        };
+            clearCanvas(canvas);
+        }).catch(error => {
+            if (active) setStampError(pdfError(error, 'تعذّر معاينة ملف PDF.'));
+        });
+        return () => { active = false; };
+    }, [activeTab, stampPdfFile, stampPage]);
 
-        loadPdf();
-        return () => {
-            isMounted = false;
-        };
-    }, [stampPdfFile, stampPage]);
+    const currentPreview = stampPreview?.file === stampPdfFile && stampPreview?.page === stampPage ? stampPreview : null;
+    const stampArea = currentPreview ? stampRectangle(currentPreview, stampPosition, stampSizePx, stampMarginPx) : null;
 
     const handleStampOnPdf = async () => {
-        if (!stampPdfFile || !qrCodeRef.current) return;
+        if (!stampPdfFile || !qrReady) return;
         setIsStamping(true);
-
+        setStampError('');
         try {
-            const { PDFDocument } = PDFLib;
-            const arrayBuffer = await stampPdfFile.arrayBuffer();
-            const pdfDoc = await PDFDocument.load(arrayBuffer);
-
-            const rawData = await qrCodeRef.current.getRawData('png');
-            if (!rawData) throw new Error("Could not get QR png data");
-
-            const embeddedQr = await pdfDoc.embedPng(rawData);
-            const page = pdfDoc.getPage(stampPage - 1);
-            const { width, height } = page.getSize();
-
-            let x = stampMarginPx;
-            let y = stampMarginPx;
-
-            if (stampPosition === 'bottom-right') {
-                x = width - stampSizePx - stampMarginPx;
-                y = stampMarginPx;
-            } else if (stampPosition === 'bottom-left') {
-                x = stampMarginPx;
-                y = stampMarginPx;
-            } else if (stampPosition === 'bottom-center') {
-                x = (width - stampSizePx) / 2;
-                y = stampMarginPx;
-            } else if (stampPosition === 'top-right') {
-                x = width - stampSizePx - stampMarginPx;
-                y = height - stampSizePx - stampMarginPx;
-            } else if (stampPosition === 'top-left') {
-                x = stampMarginPx;
-                y = height - stampSizePx - stampMarginPx;
-            }
-
-            page.drawImage(embeddedQr, {
-                x,
-                y,
-                width: stampSizePx,
-                height: stampSizePx,
+            const [{ PDFDocument, degrees }, arrayBuffer] = await Promise.all([
+                import('pdf-lib'),
+                stampPdfFile.arrayBuffer(),
+            ]);
+            const pdf = await PDFDocument.load(arrayBuffer, { updateMetadata: false });
+            const page = pdf.getPage(stampPage - 1);
+            const view = getVisiblePage(page);
+            const { left, top, length } = stampRectangle(view, stampPosition, stampSizePx, stampMarginPx);
+            const image = await pdf.embedPng(await (await getQrPng()).arrayBuffer());
+            page.drawImage(image, {
+                ...view.toPdfPoint(left, top + length),
+                width: length,
+                height: length,
+                rotate: degrees(view.rotation),
             });
-
-            const pdfBytes = await pdfDoc.save();
-            const cleanName = stampPdfFile.name.replace(/\.pdf$/i, '') + '_with_qr.pdf';
-            download(pdfBytes, cleanName, 'application/pdf');
-
-            setIsStamping(false);
-        } catch (e) {
-            console.error(e);
+            const filename = stampPdfFile.name.replace(/\.pdf$/i, '') + '_with_qr.pdf';
+            download(await pdf.save(), filename, 'application/pdf');
+        } catch (error) {
+            setStampError(pdfError(error, 'تعذّر إضافة الباركود إلى PDF.'));
+        } finally {
             setIsStamping(false);
         }
     };
 
-    // Scan QR from Image
-    const handleScanImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        setScanFile(file);
+    const handleScanImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const upload = event.currentTarget.files?.[0];
+        event.currentTarget.value = '';
+        if (!upload) return;
+        setScanFile(upload);
+        setScanCopied(false);
         setScanResult(null);
         setScanError(null);
-        setIsScanning(true);
-
-        const url = URL.createObjectURL(file);
-        setScanPreviewUrl(url);
-
-        const img = new Image();
-        img.src = url;
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-                setIsScanning(false);
-                setScanError('تعذر معالجة الصورة.');
-                return;
-            }
-
-            ctx.drawImage(img, 0, 0);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: 'dontInvert',
-            });
-
-            setIsScanning(false);
-            if (code && code.data) {
-                setScanResult(code.data);
-            } else {
-                const codeInverted = jsQR(imageData.data, imageData.width, imageData.height, {
-                    inversionAttempts: 'onlyInvert',
-                });
-                if (codeInverted && codeInverted.data) {
-                    setScanResult(codeInverted.data);
-                } else {
-                    setScanError('لم يتم العثور على باركود QR صالح داخل هذه الصورة.');
-                }
-            }
-        };
-        img.onerror = () => {
-            setIsScanning(false);
-            setScanError('فشل تحميل ملف الصورة.');
-        };
     };
+
+    useEffect(() => {
+        if (!scanFile) return;
+        let active = true;
+        const url = URL.createObjectURL(scanFile);
+        setScanPreviewUrl(url);
+        setIsScanning(true);
+        const image = new Image();
+        image.src = url;
+        image.decode().then(() => {
+            if (!active) return;
+            const canvas = document.createElement('canvas');
+            const scale = Math.min(1, 2400 / Math.max(image.naturalWidth, image.naturalHeight));
+            canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+            canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+            try {
+                const context = canvas.getContext('2d');
+                if (!context) throw new Error('Canvas unavailable');
+                context.fillStyle = '#fff';
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                context.drawImage(image, 0, 0, canvas.width, canvas.height);
+                const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(data, width, height, { inversionAttempts: 'attemptBoth' });
+                if (code?.data) setScanResult(code.data);
+                else setScanError('تعذّر العثور على كود QR. جرّب صورة أوضح تُظهر الرمز كاملاً.');
+            } finally {
+                clearCanvas(canvas);
+            }
+        }).catch(() => {
+            if (active) setScanError('تعذّر فتح الصورة.');
+        }).finally(() => {
+            if (active) setIsScanning(false);
+        });
+        return () => {
+            active = false;
+            URL.revokeObjectURL(url);
+        };
+    }, [scanFile]);
 
     return (
         <div className="max-w-5xl mx-auto space-y-6">
@@ -549,6 +511,7 @@ const QrCodeGenerator: React.FC = () => {
                                         type="url"
                                         value={urlInput}
                                         onChange={(e) => setUrlInput(e.target.value)}
+                                        aria-label="رابط الموقع"
                                         placeholder="https://example.com"
                                         className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3.5 text-sm text-slate-800 font-mono"
                                         dir="ltr"
@@ -943,16 +906,16 @@ const QrCodeGenerator: React.FC = () => {
                                 <span>معاينة حية للباركود</span>
                             </span>
                             <h3 className="text-sm font-black text-slate-800">
-                                باركود نظيف تماماً وخالٍ من أي صورة
+                                {qrReady ? 'معاينة رمز QR' : 'أدخل بيانات صالحة لإنشاء الباركود'}
                             </h3>
                         </div>
 
                         {/* Card Container (Clean without any center image) */}
                         <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 shadow-inner flex flex-col items-center max-w-xs w-full">
-                            <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-center">
+                            <div className="w-full bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-center">
                                 <div
                                     ref={qrContainerRef}
-                                    className="w-[260px] h-[260px] flex items-center justify-center overflow-hidden"
+                                    className="w-full max-w-[260px] aspect-square flex items-center justify-center overflow-hidden [&>svg]:h-full [&>svg]:w-full"
                                 />
                             </div>
 
@@ -974,7 +937,7 @@ const QrCodeGenerator: React.FC = () => {
                             {/* Download as Printable PDF Card */}
                             <button
                                 onClick={handleDownloadPrintablePdf}
-                                disabled={isLoading}
+                                disabled={isLoading || !qrReady}
                                 className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-3.5 px-4 rounded-2xl hover:opacity-95 shadow-lg shadow-blue-500/25 transition-all text-xs sm:text-sm flex items-center justify-center gap-2"
                             >
                                 <DocumentIcon className="w-5 h-5" />
@@ -983,14 +946,16 @@ const QrCodeGenerator: React.FC = () => {
 
                             <div className="grid grid-cols-2 gap-2">
                                 <button
-                                    onClick={handleDownloadPng}
+                                    disabled={!qrReady}
+                                    onClick={() => exportQr('png')}
                                     className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 px-3 rounded-xl transition-colors text-xs flex items-center justify-center gap-1.5 border border-slate-200"
                                 >
                                     <ArrowDownTrayIcon className="w-4 h-4" />
                                     <span>صورة PNG</span>
                                 </button>
                                 <button
-                                    onClick={handleDownloadSvg}
+                                    disabled={!qrReady}
+                                    onClick={() => exportQr('svg')}
                                     className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 px-3 rounded-xl transition-colors text-xs flex items-center justify-center gap-1.5 border border-slate-200"
                                 >
                                     <ArrowDownTrayIcon className="w-4 h-4" />
@@ -1000,6 +965,7 @@ const QrCodeGenerator: React.FC = () => {
 
                             <button
                                 onClick={handleCopyImage}
+                                disabled={!qrReady}
                                 className="w-full bg-white hover:bg-slate-50 text-slate-700 font-bold py-2.5 px-4 rounded-xl transition-colors text-xs flex items-center justify-center gap-1.5 border border-slate-200"
                             >
                                 {copied ? <CheckIcon className="w-4 h-4 text-emerald-600" /> : <ClipboardIcon className="w-4 h-4" />}
@@ -1035,6 +1001,7 @@ const QrCodeGenerator: React.FC = () => {
                                         <p className="text-slate-500">إجمالي الصفحات: {stampTotalPages}</p>
                                     </div>
                                     <button
+                                        disabled={isStamping}
                                         onClick={() => setStampPdfFile(null)}
                                         className="text-xs text-slate-500 hover:text-slate-800 font-bold px-2.5 py-1 rounded-lg border border-slate-200"
                                     >
@@ -1048,7 +1015,8 @@ const QrCodeGenerator: React.FC = () => {
                                     <div className="flex items-center gap-3">
                                         <button
                                             onClick={() => setStampPage(p => Math.max(1, p - 1))}
-                                            disabled={stampPage <= 1}
+                                            aria-label="الصفحة السابقة"
+                                            disabled={isStamping || stampPage <= 1}
                                             className="p-2 rounded-xl border border-slate-200 disabled:opacity-40"
                                         >
                                             <ChevronRightIcon className="w-4 h-4" />
@@ -1058,7 +1026,8 @@ const QrCodeGenerator: React.FC = () => {
                                         </span>
                                         <button
                                             onClick={() => setStampPage(p => Math.min(stampTotalPages, p + 1))}
-                                            disabled={stampPage >= stampTotalPages}
+                                            aria-label="الصفحة التالية"
+                                            disabled={isStamping || stampPage >= stampTotalPages}
                                             className="p-2 rounded-xl border border-slate-200 disabled:opacity-40"
                                         >
                                             <ChevronLeftIcon className="w-4 h-4" />
@@ -1119,9 +1088,10 @@ const QrCodeGenerator: React.FC = () => {
                                     </div>
                                 </div>
 
+                                {!qrReady && <p className="text-sm text-slate-700">أنشئ رمز QR من تبويب التوليد أولاً.</p>}
                                 <button
                                     onClick={handleStampOnPdf}
-                                    disabled={isStamping}
+                                    disabled={isStamping || !qrReady || !currentPreview}
                                     className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-3.5 px-4 rounded-2xl hover:opacity-95 shadow-lg shadow-blue-500/25 transition-all text-sm flex items-center justify-center gap-2"
                                 >
                                     {isStamping ? (
@@ -1142,12 +1112,24 @@ const QrCodeGenerator: React.FC = () => {
                             <div className="lg:col-span-7 bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col items-center">
                                 <span className="text-xs font-bold text-slate-500 mb-3">معاينة الصفحة {stampPage}</span>
                                 <div className="relative max-h-[500px] overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm p-2">
-                                    {stampPagePreviewUrl ? (
-                                        <img src={stampPagePreviewUrl} alt="Page preview" className="max-w-full h-auto" />
+                                    {currentPreview ? (
+                                        <div className="relative w-fit max-w-full" dir="ltr">
+                                            <img src={currentPreview.url} alt="معاينة صفحة PDF" className="block max-w-full h-auto" />
+                                            {qrPreview && stampArea && <img
+                                                alt="موضع الباركود"
+                                                src={qrPreview}
+                                                className="pointer-events-none absolute"
+                                                style={{
+                                                    left: `${100 * stampArea.left / currentPreview.width}%`,
+                                                    top: `${100 * stampArea.top / currentPreview.height}%`,
+                                                    width: `${100 * stampArea.length / currentPreview.width}%`,
+                                                }}
+                                            />}
+                                        </div>
                                     ) : (
                                         <div className="py-20 text-center">
                                             <LoadingSpinner />
-                                            <p className="text-xs text-slate-500 mt-2">جاري تجهيز المعاينة...</p>
+                                            <p className="text-xs text-slate-500 mt-2">{stampError ? 'المعاينة غير متاحة.' : 'جاري تجهيز المعاينة…'}</p>
                                         </div>
                                     )}
                                 </div>
@@ -1156,6 +1138,8 @@ const QrCodeGenerator: React.FC = () => {
                     )}
                 </div>
             )}
+
+            {(qrError || (activeTab === 'stamp' && stampError)) && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{stampError && activeTab === 'stamp' ? stampError : qrError}</p>}
 
             {/* TAB 3: SCAN QR FROM IMAGE */}
             {activeTab === 'scan' && (
@@ -1204,11 +1188,13 @@ const QrCodeGenerator: React.FC = () => {
                                     <span>تمت قراءة الباركود بنجاح!</span>
                                 </span>
                                 <button
-                                    onClick={() => {
-                                        if (scanResult) {
-                                            navigator.clipboard.writeText(scanResult);
+                                    onClick={async () => {
+                                        try {
+                                            await navigator.clipboard.writeText(scanResult);
                                             setScanCopied(true);
                                             setTimeout(() => setScanCopied(false), 2000);
+                                        } catch {
+                                            setScanError('تعذّر النسخ إلى الحافظة. حدّد النص وانسخه يدوياً.');
                                         }
                                     }}
                                     className="bg-white hover:bg-emerald-100 text-emerald-800 text-xs font-bold py-1.5 px-3 rounded-xl border border-emerald-300 transition-colors flex items-center gap-1"
@@ -1223,9 +1209,9 @@ const QrCodeGenerator: React.FC = () => {
                             </div>
 
                             {/* If it's a URL, offer direct open button */}
-                            {scanResult.startsWith('http://') || scanResult.startsWith('https://') ? (
+                            {publicUrl(scanResult) ? (
                                 <a
-                                    href={scanResult}
+                                    href={publicUrl(scanResult)}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline pt-1"

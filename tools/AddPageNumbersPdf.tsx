@@ -3,8 +3,8 @@ import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListBulletIcon, ArrowDownTrayIcon, SparklesIcon } from '../components/icons';
 
-declare const PDFLib: any;
-declare const download: any;
+import { canvasToBlob, downloadFile as download, pdfError } from './pdfRuntime';
+import { getVisiblePage } from './pdf-pages/pdfOperations';
 
 type Position = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
 type NumberFormat = 'simple' | 'slash' | 'arabic-text' | 'dash';
@@ -41,95 +41,61 @@ const AddPageNumbersPdf: React.FC = () => {
         }
     };
 
-    // Helper to render text to small PNG image so Arabic text ("صفحة 1 من 10") is always 100% supported without fontkit crashes
-    const createNumberImage = (text: string, size: number): Promise<Uint8Array> => {
-        const scale = 2;
+    async function createNumberImage(text: string, size: number) {
+        const scale = 3;
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error("Canvas context failed");
-
-        ctx.font = `bold ${size * scale}px 'Cairo', 'Arial', sans-serif`;
-        const textMetrics = ctx.measureText(text);
-        const width = Math.ceil(textMetrics.width) + 16;
-        const height = Math.ceil(size * scale * 1.5) + 8;
-
-        canvas.width = width;
-        canvas.height = height;
-
-        ctx.font = `bold ${size * scale}px 'Cairo', 'Arial', sans-serif`;
-        ctx.fillStyle = '#334155'; // Slate-700
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, width / 2, height / 2);
-
-        return new Promise<Uint8Array>((resolve, reject) => {
-            canvas.toBlob((blob) => {
-                if (!blob) return reject(new Error("Blob error"));
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
-                reader.readAsArrayBuffer(blob);
-            }, 'image/png');
-        });
-    };
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Canvas unavailable');
+        const font = `bold ${size * scale}px Arial, sans-serif`;
+        context.font = font;
+        canvas.width = Math.ceil(context.measureText(text).width + 6);
+        canvas.height = Math.ceil(size * scale * 1.4);
+        context.font = font;
+        context.fillStyle = '#334155';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.direction = 'rtl';
+        context.fillText(text, canvas.width / 2, canvas.height / 2);
+        return (await canvasToBlob(canvas)).arrayBuffer();
+    }
 
     const handleAddNumbers = async () => {
         if (!file) return;
+        if (!Number.isSafeInteger(startFrom) || startFrom < 1 || startFrom > 999999) {
+            setError('اكتب رقماً صحيحاً لبدء الترقيم من 1 إلى 999999.');
+            return;
+        }
         setIsLoading(true);
         setError(null);
-
         try {
-            const { PDFDocument } = PDFLib;
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfDoc = await PDFDocument.load(arrayBuffer);
-            const pages = pdfDoc.getPages();
-            const total = pages.length;
-
-            for (let i = 0; i < pages.length; i++) {
-                const page = pages[i];
-                const { width, height } = page.getSize();
-                const currentNumber = i + startFrom;
-                const textStr = formatNumberText(currentNumber, total);
-
-                const pngBytes = await createNumberImage(textStr, fontSize);
-                const embeddedImage = await pdfDoc.embedPng(pngBytes);
-                const imgWidth = embeddedImage.width / 2;
-                const imgHeight = embeddedImage.height / 2;
-
-                let x = 0;
-                let y = 0;
-
-                // Vertical
-                if (position.startsWith('bottom')) {
-                    y = margin;
+            const { PDFDocument, StandardFonts, degrees, rgb } = await import('pdf-lib');
+            const pdf = await PDFDocument.load(await file.arrayBuffer(), { updateMetadata: false });
+            const pages = pdf.getPages();
+            const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+            for (const [index, page] of pages.entries()) {
+                const view = getVisiblePage(page);
+                const text = formatNumberText(startFrom + index, startFrom + pages.length - 1);
+                const image = format === 'arabic-text' ? await pdf.embedPng(await createNumberImage(text, fontSize)) : null;
+                const naturalWidth = image ? image.width / 3 : font.widthOfTextAtSize(text, fontSize);
+                const naturalHeight = image ? image.height / 3 : font.heightAtSize(fontSize);
+                const inset = Math.min(margin, view.width / 4, view.height / 4);
+                const factor = Math.min(1, (view.width - 2 * inset) / naturalWidth, (view.height - 2 * inset) / naturalHeight);
+                const width = naturalWidth * factor;
+                const height = naturalHeight * factor;
+                const x = position.endsWith('left') ? inset : position.endsWith('right') ? view.width - inset - width : (view.width - width) / 2;
+                const top = position.startsWith('top') ? inset : view.height - inset - height;
+                const start = view.toPdfPoint(x, top + height);
+                const rotate = degrees(view.rotation);
+                if (image) {
+                    page.drawImage(image, { ...start, width, height, rotate });
                 } else {
-                    y = height - imgHeight - margin;
+                    page.drawText(text, { ...start, font, size: fontSize * factor, rotate, color: rgb(0.2, 0.25, 0.33) });
                 }
-
-                // Horizontal
-                if (position.endsWith('left')) {
-                    x = margin;
-                } else if (position.endsWith('center')) {
-                    x = (width - imgWidth) / 2;
-                } else {
-                    x = width - imgWidth - margin;
-                }
-
-                page.drawImage(embeddedImage, {
-                    x,
-                    y,
-                    width: imgWidth,
-                    height: imgHeight,
-                });
             }
-
-            const pdfBytes = await pdfDoc.save();
-            const cleanName = file.name.replace(/\.pdf$/i, '') + '_numbered.pdf';
-            download(pdfBytes, cleanName, "application/pdf");
-
-            setIsLoading(false);
-        } catch (e: any) {
-            console.error(e);
-            setError("حدث خطأ أثناء إضافة أرقام الصفحات.");
+            download(await pdf.save(), file.name.replace(/\.pdf$/i, '') + '_numbered.pdf', 'application/pdf');
+        } catch (error) {
+            setError(pdfError(error, 'تعذّر إضافة أرقام الصفحات. تأكد من سلامة الملف.'));
+        } finally {
             setIsLoading(false);
         }
     };
@@ -152,6 +118,7 @@ const AddPageNumbersPdf: React.FC = () => {
                             </div>
                         </div>
                         <button
+                            disabled={isLoading}
                             onClick={() => setFile(null)}
                             className="text-xs text-slate-500 hover:text-slate-800 font-bold px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors"
                         >
@@ -224,7 +191,7 @@ const AddPageNumbersPdf: React.FC = () => {
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                                    حجم الخط ({fontSize}px)
+                                    حجم الخط ({fontSize} نقطة)
                                 </label>
                                 <input
                                     type="range"
@@ -237,7 +204,7 @@ const AddPageNumbersPdf: React.FC = () => {
                             </div>
                             <div>
                                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                                    الهامش من الحافة ({margin}px)
+                                    الهامش من الحافة ({margin} نقطة)
                                 </label>
                                 <input
                                     type="range"
@@ -249,6 +216,11 @@ const AddPageNumbersPdf: React.FC = () => {
                                 />
                             </div>
                         </div>
+
+                        <label className="block space-y-1 text-sm font-bold text-slate-700">
+                            <span>بدء الترقيم من</span>
+                            <input type="number" min="1" max="999999" step="1" value={startFrom || ''} onChange={event => setStartFrom(Number(event.currentTarget.value))} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900" />
+                        </label>
 
                         {/* Submit Button */}
                         <button
