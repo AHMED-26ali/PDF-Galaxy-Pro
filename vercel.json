@@ -27,6 +27,17 @@
   ],
   "rewrites": [
     {
+      "source": "/",
+      "has": [
+        {
+          "type": "query",
+          "key": "tool",
+          "value": "(?<toolSlug>merge|split|compress|rotate|image-to-pdf|pdf-to-image|pdf-to-word|add-page-numbers|watermark|protect|extract-text|ocr|qr-generator|delete-pages|reorder-pages|extract-pages|crop|sign|edit-pdf)"
+        }
+      ],
+      "destination": "/_tool-pages/:toolSlug"
+    },
+    {
       "source": "/sitemap.xml",
       "destination": "/sitemap.xml"
     },

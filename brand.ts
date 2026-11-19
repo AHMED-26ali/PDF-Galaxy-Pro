@@ -1,4 +1,5 @@
 import type { Tool } from './types';
+import { toolSearchPages } from './toolSearch';
 
 export const brandName = 'PDFix';
 export const homeTitle = `${brandName} | تعديل ودمج وضغط وتحويل PDF أونلاين`;
@@ -6,11 +7,15 @@ export const homeDescription = 'أدوات PDF مجانية بالعربي. عد
 export const siteUrl = 'https://pdfix-tools.vercel.app/';
 export const brandIcon = '/pdfix-mark.svg';
 
+export function toolPath(id: string): string {
+    return `/?tool=${encodeURIComponent(id)}`;
+}
+
 export function updatePageMetadata(tool?: Tool) {
-    const title = tool ? `${tool.title} | ${brandName}` : homeTitle;
-    const description = tool?.description ?? homeDescription;
-    const url = new URL(siteUrl);
-    if (tool) url.searchParams.set('tool', tool.id);
+    const searchPage = tool ? toolSearchPages[tool.id] : undefined;
+    const title = tool ? `${searchPage?.title ?? tool.title} | ${brandName}` : homeTitle;
+    const description = searchPage?.description ?? tool?.description ?? homeDescription;
+    const url = new URL(tool ? toolPath(tool.id) : '/', siteUrl);
     document.title = title;
     document.querySelector('link[rel="canonical"]')?.setAttribute('href', url.href);
     document.querySelector('meta[name="description"]')?.setAttribute('content', description);

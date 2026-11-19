@@ -2,6 +2,7 @@ import path from 'path';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { defineConfig, type Plugin } from 'vite';
+import { staticSearchPages } from './staticSearchPages';
 
 const require = createRequire(import.meta.url);
 
@@ -35,7 +36,7 @@ export default defineConfig(() => {
         port: 3000,
         host: '0.0.0.0',
       },
-      plugins: [react(), localOcrData()],
+      plugins: [react(), localOcrData(), staticSearchPages()],
       build: {
         rollupOptions: {
           input: {

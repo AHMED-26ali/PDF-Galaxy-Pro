@@ -1,5 +1,6 @@
 import React from 'react';
 import { Tool } from '../types';
+import { toolPath } from '../brand';
 
 interface ToolCardProps {
   tool: Tool;
@@ -55,15 +56,12 @@ const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect }) => {
   const theme = themeStyles[tool.colorTheme || 'sky'];
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onSelect();
-        }
+    <a
+      href={toolPath(tool.id)}
+      onClick={event => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        onSelect();
       }}
       className={`group relative flex flex-col justify-between p-6 bg-white hover:bg-slate-50/50 rounded-3xl border border-slate-200/90 shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer overflow-hidden transform hover:-translate-y-1.5 text-right focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${theme.hoverBorder}`}
     >
@@ -120,7 +118,7 @@ const ToolCard: React.FC<ToolCardProps> = ({ tool, onSelect }) => {
           </svg>
         </span>
       </div>
-    </div>
+    </a>
   );
 };
 
