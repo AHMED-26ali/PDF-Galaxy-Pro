@@ -1,4 +1,5 @@
 import React from 'react';
+import Brand from './Brand';
 import { Tool, ToolCategory } from '../types';
 
 interface HeaderProps {
@@ -12,30 +13,9 @@ const Header: React.FC<HeaderProps> = ({ currentView, selectedTool, onNavigate }
         <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="flex items-center justify-between h-20">
-                    {/* Brand Logo & Title */}
-                    <div 
-                        onClick={() => onNavigate('tools')}
-                        className="flex items-center gap-3.5 cursor-pointer group"
-                    >
-                        <div className="relative w-12 h-12 rounded-2xl overflow-hidden shadow-lg shadow-blue-500/25 group-hover:scale-105 transition-all duration-200 border border-white/50 bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center p-0.5">
-                            <img 
-                                src="/logo.svg" 
-                                alt="PDF Galaxy Pro Logo" 
-                                className="w-full h-full object-contain rounded-xl"
-                            />
-                        </div>
-                        <div>
-                            <div className="flex items-center gap-2">
-                                <span className="text-2xl font-black bg-gradient-to-l from-blue-700 via-indigo-700 to-purple-700 bg-clip-text text-transparent tracking-tight">
-                                    PDF Galaxy
-                                </span>
-                                <span className="text-[11px] font-bold text-blue-700 bg-blue-100/80 border border-blue-200 px-2 py-0.5 rounded-full">
-                                    PRO
-                                </span>
-                            </div>
-                            <p className="text-xs text-slate-500 font-medium">أدوات PDF احترافية ومجانية بالكامل</p>
-                        </div>
-                    </div>
+                    <button type="button" onClick={() => onNavigate('tools')} className="rounded-xl text-start focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
+                        <Brand subtitle="أدوات PDF أونلاين" />
+                    </button>
 
                     {/* Navigation Links */}
                     <nav className="hidden md:flex items-center gap-1 bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/60">

@@ -12,7 +12,10 @@ export type OpenPdf = {
 export const secondaryButton = 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40';
 export const field = 'w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-slate-900';
 
-export function PdfWorkspace({ children }: { children: (file: OpenPdf) => ReactNode }) {
+export function PdfWorkspace({ children, emptyHeader }: {
+    children: (file: OpenPdf, reset: () => void) => ReactNode;
+    emptyHeader?: ReactNode;
+}) {
     const [file, setFile] = useState<OpenPdf | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -38,7 +41,10 @@ export function PdfWorkspace({ children }: { children: (file: OpenPdf) => ReactN
         }
     }
 
-    return (
+    const reset = () => setFile(null);
+    if (file && emptyHeader) return <>{children(file, reset)}</>;
+
+    const content = (
         <div className="space-y-5">
             {file ? (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -46,7 +52,7 @@ export function PdfWorkspace({ children }: { children: (file: OpenPdf) => ReactN
                         <p className="break-all font-bold text-slate-900"><bdi>{file.name}</bdi></p>
                         <p className="text-sm text-slate-600">عدد الصفحات {file.document.getPageCount()}</p>
                     </div>
-                    <button type="button" className={secondaryButton} onClick={() => setFile(null)}>اختيار ملف آخر</button>
+                    <button type="button" className={secondaryButton} onClick={reset}>اختيار ملف آخر</button>
                 </div>
             ) : (
                 <label className="block rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50 p-5 sm:p-8 text-sm font-bold text-slate-800">
@@ -66,15 +72,25 @@ export function PdfWorkspace({ children }: { children: (file: OpenPdf) => ReactN
             )}
             {loading && <div role="status" className="flex items-center gap-3 text-sm text-slate-700"><LoadingSpinner /> جاري فتح الملف…</div>}
             {error && <p role="alert" className="text-sm font-bold text-red-700">{error}</p>}
-            {file && children(file)}
+            {file && children(file, reset)}
         </div>
     );
+
+    return emptyHeader ? (
+        <>
+            {emptyHeader}
+            <main className="grid min-h-0 flex-1 place-items-center overflow-auto px-5 py-8">
+                <div className="w-full max-w-lg">{content}</div>
+            </main>
+        </>
+    ) : content;
 }
 
-export function PdfDownload({ disabled, filename, save }: {
+export function PdfDownload({ disabled, filename, save, compact = false }: {
     disabled: boolean;
     filename: string;
     save: () => Promise<Uint8Array>;
+    compact?: boolean;
 }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -117,7 +133,9 @@ export function PdfDownload({ disabled, filename, save }: {
                 type="button"
                 disabled={disabled || loading}
                 onClick={download}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                className={compact
+                    ? 'inline-flex min-h-9 items-center gap-1.5 whitespace-nowrap rounded-lg bg-blue-700 px-3 py-2 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-40'
+                    : 'inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40'}
             >
                 <ArrowDownTrayIcon aria-hidden className="h-5 w-5" />
                 {loading ? 'جاري تجهيز الملف…' : 'تحميل PDF'}

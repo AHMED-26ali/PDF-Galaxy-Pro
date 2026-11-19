@@ -1,5 +1,5 @@
 {
-  "name": "PDF Galaxy Pro",
-  "description": "An advanced and innovative web application for creating and editing PDF files. It provides a suite of powerful tools with a futuristic, space-themed design and an intuitive user experience, primarily in Arabic with full RTL support.",
+  "name": "مدار PDF",
+  "description": "أدوات PDF مجانية بالعربي. عدّل النصوص، ادمج واضغط الملفات، حوّل PDF إلى Word أو صور، واستخرج النصوص بالـOCR داخل المتصفح.",
   "requestFramePermissions": []
 }

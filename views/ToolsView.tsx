@@ -58,7 +58,7 @@ const ToolsView: React.FC<ToolsViewProps> = ({ tools, onSelectTool, initialCateg
                     </div>
 
                     <h1 className="text-3xl sm:text-5xl font-black tracking-tight leading-tight mb-5">
-                        كل ما تحتاجه لإدارة وتعديل ملفاتك في مكان واحد
+                        أدوات PDF أونلاين بالعربي
                     </h1>
 
                     <p className="text-blue-100 text-base sm:text-lg leading-relaxed mb-8 max-w-2xl font-medium">

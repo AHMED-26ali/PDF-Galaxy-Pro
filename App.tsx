@@ -5,6 +5,8 @@ import ToolsView from './views/ToolsView';
 import ToolWrapper from './views/ToolWrapper';
 import { Tool, ToolCategory } from './types';
 import { tools } from './constants';
+import { updatePageMetadata } from './brand';
+import EditorEntry from './tools/pdf-editor/EditorEntry';
 
 declare const pdfjsLib: any;
 
@@ -32,13 +34,13 @@ const App: React.FC = () => {
                 if (found) {
                     setSelectedTool(found);
                     setCurrentView('tool');
-                    document.title = `${found.title} - PDF Galaxy Pro`;
+                    updatePageMetadata(found);
                     return;
                 }
             }
             setSelectedTool(null);
             setCurrentView('tools');
-            document.title = 'PDF Galaxy Pro - محرر وأدوات PDF الاحترافية';
+            updatePageMetadata();
         };
 
         updateFromUrl();
@@ -52,7 +54,7 @@ const App: React.FC = () => {
         const url = new URL(window.location.href);
         url.searchParams.set('tool', tool.id);
         window.history.pushState(null, '', url.pathname + url.search);
-        document.title = `${tool.title} - PDF Galaxy Pro`;
+        updatePageMetadata(tool);
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
@@ -62,7 +64,7 @@ const App: React.FC = () => {
         const url = new URL(window.location.href);
         url.searchParams.delete('tool');
         window.history.pushState(null, '', url.pathname);
-        document.title = 'PDF Galaxy Pro - محرر وأدوات PDF الاحترافية';
+        updatePageMetadata();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
     
@@ -72,7 +74,7 @@ const App: React.FC = () => {
             const url = new URL(window.location.href);
             url.searchParams.delete('tool');
             window.history.pushState(null, '', url.pathname);
-            document.title = 'PDF Galaxy Pro - محرر وأدوات PDF الاحترافية';
+            updatePageMetadata();
         }
         if (category) {
             setSelectedCategory(category);
@@ -99,6 +101,10 @@ const App: React.FC = () => {
         );
     };
     
+    if (currentView === 'tool' && selectedTool?.id === 'edit-pdf') {
+        return <EditorEntry onBack={handleBackToTools} />;
+    }
+
     return (
         <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
             {/* Top Navigation Bar (راس للموقع) */}
