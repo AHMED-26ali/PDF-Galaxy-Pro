@@ -1,8 +1,8 @@
 # Robots.txt for PDFix
-# https://pdf-galaxy-pro.vercel.app/
+# https://pdfix-tools.vercel.app/
 
 User-agent: *
 Allow: /
 
 # Sitemaps
-Sitemap: https://pdf-galaxy-pro.vercel.app/sitemap.xml
+Sitemap: https://pdfix-tools.vercel.app/sitemap.xml

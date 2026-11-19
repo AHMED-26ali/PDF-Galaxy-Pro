@@ -3,7 +3,7 @@ import type { Tool } from './types';
 export const brandName = 'PDFix';
 export const homeTitle = `${brandName} | تعديل ودمج وضغط وتحويل PDF أونلاين`;
 export const homeDescription = 'أدوات PDF مجانية بالعربي. عدّل النصوص، ادمج واضغط الملفات، حوّل PDF إلى Word أو صور، واستخرج النصوص بالـOCR داخل المتصفح.';
-export const siteUrl = 'https://pdf-galaxy-pro.vercel.app/';
+export const siteUrl = 'https://pdfix-tools.vercel.app/';
 export const brandIcon = '/pdfix-mark.svg';
 
 export function updatePageMetadata(tool?: Tool) {
