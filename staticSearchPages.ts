@@ -61,7 +61,7 @@ export function staticSearchPages(): Plugin {
                         <p><a class="underline" href="/">جميع الأدوات</a> · <a class="underline" href="/privacy">سياسة الخصوصية</a></p>`);
                     this.emitFile({
                         type: 'asset',
-                        fileName: `_tool-pages/${id}.html`,
+                        fileName: `tools/${id}.html`,
                         source: withFallback(updateToolHead(html, id, title, description), article),
                     });
                 }

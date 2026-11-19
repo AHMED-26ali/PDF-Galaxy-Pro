@@ -7,6 +7,22 @@
       "has": [
         {
           "type": "host",
+          "value": "(?:pdfix-tools|pdf-galaxy-pro)\\.vercel\\.app"
+        },
+        {
+          "type": "query",
+          "key": "tool",
+          "value": "(?<toolSlug>merge|split|compress|rotate|image-to-pdf|pdf-to-image|pdf-to-word|add-page-numbers|watermark|protect|extract-text|ocr|qr-generator|delete-pages|reorder-pages|extract-pages|crop|sign|edit-pdf)"
+        }
+      ],
+      "destination": "https://pdfix-tools.vercel.app/tools/:toolSlug",
+      "statusCode": 301
+    },
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
           "value": "pdf-galaxy-pro.vercel.app"
         }
       ],
@@ -26,17 +42,6 @@
     }
   ],
   "rewrites": [
-    {
-      "source": "/",
-      "has": [
-        {
-          "type": "query",
-          "key": "tool",
-          "value": "(?<toolSlug>merge|split|compress|rotate|image-to-pdf|pdf-to-image|pdf-to-word|add-page-numbers|watermark|protect|extract-text|ocr|qr-generator|delete-pages|reorder-pages|extract-pages|crop|sign|edit-pdf)"
-        }
-      ],
-      "destination": "/_tool-pages/:toolSlug"
-    },
     {
       "source": "/sitemap.xml",
       "destination": "/sitemap.xml"

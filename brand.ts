@@ -8,7 +8,7 @@ export const siteUrl = 'https://pdfix-tools.vercel.app/';
 export const brandIcon = '/pdfix-mark.svg';
 
 export function toolPath(id: string): string {
-    return `/?tool=${encodeURIComponent(id)}`;
+    return `/tools/${encodeURIComponent(id)}`;
 }
 
 export function updatePageMetadata(tool?: Tool) {

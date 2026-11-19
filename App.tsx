@@ -5,7 +5,7 @@ import ToolsView from './views/ToolsView';
 import ToolWrapper from './views/ToolWrapper';
 import { Tool, ToolCategory } from './types';
 import { tools } from './constants';
-import { updatePageMetadata } from './brand';
+import { toolPath, updatePageMetadata } from './brand';
 import EditorEntry from './tools/pdf-editor/EditorEntry';
 
 declare const pdfjsLib: any;
@@ -25,9 +25,10 @@ const App: React.FC = () => {
     useEffect(() => {
         const updateFromUrl = () => {
             const urlParams = new URLSearchParams(window.location.search);
+            const toolFromPath = /^\/tools\/([a-z-]+)\/?$/.exec(window.location.pathname)?.[1];
             const toolFromQuery = urlParams.get('tool');
             const hash = window.location.hash.replace('#', '').trim();
-            const targetToolId = toolFromQuery || hash;
+            const targetToolId = toolFromPath || toolFromQuery || hash;
 
             if (targetToolId) {
                 const found = tools.find(t => t.id === targetToolId);
@@ -52,7 +53,8 @@ const App: React.FC = () => {
         setSelectedTool(tool);
         setCurrentView('tool');
         const url = new URL(window.location.href);
-        url.searchParams.set('tool', tool.id);
+        url.pathname = toolPath(tool.id);
+        url.searchParams.delete('tool');
         window.history.pushState(null, '', url.pathname + url.search);
         updatePageMetadata(tool);
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -61,9 +63,7 @@ const App: React.FC = () => {
     const handleBackToTools = () => {
         setSelectedTool(null);
         setCurrentView('tools');
-        const url = new URL(window.location.href);
-        url.searchParams.delete('tool');
-        window.history.pushState(null, '', url.pathname);
+        window.history.pushState(null, '', '/');
         updatePageMetadata();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
@@ -71,9 +71,7 @@ const App: React.FC = () => {
     const handleNavigate = (view: string, category?: ToolCategory) => {
         if (view !== 'tool') {
             setSelectedTool(null);
-            const url = new URL(window.location.href);
-            url.searchParams.delete('tool');
-            window.history.pushState(null, '', url.pathname);
+            window.history.pushState(null, '', '/');
             updatePageMetadata();
         }
         if (category) {
