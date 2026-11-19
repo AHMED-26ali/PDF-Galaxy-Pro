@@ -1,4 +1,4 @@
-import { PDFArray, PDFDict, PDFName, PDFRawStream, PDFRef, PDFStream, decodePDFRawStream, type PDFDocument, type PDFObject, type PDFPage } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, PDFStream, decodePDFRawStream, type PDFDocument, type PDFObject, type PDFPage } from 'pdf-lib';
 
 type Token = { text: string; start: number; end: number };
 type ContentPosition = { stream: number; start: number; end: number };
@@ -24,7 +24,11 @@ type TextState = {
     horizontalScale: number;
     renderingMode: number;
     fill: string | null;
+    fillOpacity: number;
+    strokeOpacity: number;
 };
+
+type ExternalTextState = { hasFont: boolean; fillOpacity?: number; strokeOpacity?: number };
 type PageStreams = { original: PDFObject | undefined; parts: PDFObject[]; sources: string[] };
 
 function isSpace(character: string) {
@@ -96,9 +100,9 @@ function actualTextEntry(source: string, dictionary: Token | undefined, stream: 
     return null;
 }
 
-export function listTextDraws(sources: string[], hasGraphicsStateFont: (name: string) => boolean): TextDraw[] {
+export function listTextDraws(sources: string[], graphicsState: (name: string) => ExternalTextState): TextDraw[] {
     const targets: TextDraw[] = [];
-    let state: TextState = { font: '', size: 0, characterSpace: 0, wordSpace: 0, horizontalScale: 100, renderingMode: 0, fill: '0 g' };
+    let state: TextState = { font: '', size: 0, characterSpace: 0, wordSpace: 0, horizontalScale: 100, renderingMode: 0, fill: '0 g', fillOpacity: 1, strokeOpacity: 1 };
     const stack: TextState[] = [];
     const markedText: (ContentPosition | null)[] = [];
     let withinText = false;
@@ -129,8 +133,12 @@ export function listTextDraws(sources: string[], hasGraphicsStateFont: (name: st
             else if (text === 'Tf') {
                 state.font = args[0]?.text ?? '';
                 state.size = number(1);
-            } else if (text === 'gs' && hasGraphicsStateFont(args[0]?.text ?? '')) state.font = '';
-            else if (text === 'Tc') state.characterSpace = number(0);
+            } else if (text === 'gs') {
+                const external = graphicsState(args[0]?.text ?? '');
+                if (external.hasFont) state.font = '';
+                state.fillOpacity = external.fillOpacity ?? state.fillOpacity;
+                state.strokeOpacity = external.strokeOpacity ?? state.strokeOpacity;
+            } else if (text === 'Tc') state.characterSpace = number(0);
             else if (text === 'Tw') state.wordSpace = number(0);
             else if (text === 'Tz') state.horizontalScale = number(0);
             else if (text === 'Tr') state.renderingMode = number(0);
@@ -142,7 +150,10 @@ export function listTextDraws(sources: string[], hasGraphicsStateFont: (name: st
                     state.characterSpace = number(1);
                 }
                 const textOperand = args.at(-1)?.text ?? '';
-                if (!withinText || !state.font.startsWith('/') || state.size <= 0 || state.horizontalScale <= 0
+                // A searchable scan can contain text that is deliberately invisible under its image.
+                const visible = state.renderingMode === 0 ? state.fillOpacity > 0
+                    : state.renderingMode === 1 ? state.strokeOpacity > 0 : state.strokeOpacity > 0 || state.fillOpacity > 0;
+                if (!visible || !withinText || !state.font.startsWith('/') || state.size <= 0 || state.horizontalScale <= 0
                     || ![0, 1, 2].includes(state.renderingMode) || !/^[\[(<]/.test(textOperand)
                     || ![state.size, state.horizontalScale, state.characterSpace, state.wordSpace].every(Number.isFinite)) continue;
                 const lineAdvance = text === '"' ? `${state.wordSpace} Tw ${state.characterSpace} Tc T*\n` : text === "'" ? 'T*\n' : '';
@@ -200,7 +211,11 @@ export function pageContent(pdf: PDFDocument, page: PDFPage) {
     const states = page.node.Resources()?.lookupMaybe(PDFName.ExtGState, PDFDict);
     const targets = listTextDraws(streams.sources, name => {
         const state = states?.lookupMaybe(PDFName.of(name.slice(1)), PDFDict);
-        return Boolean(state?.get(PDFName.Font));
+        return {
+            hasFont: Boolean(state?.get(PDFName.Font)),
+            fillOpacity: state?.lookupMaybe(PDFName.of('ca'), PDFNumber)?.asNumber(),
+            strokeOpacity: state?.lookupMaybe(PDFName.of('CA'), PDFNumber)?.asNumber(),
+        };
     });
     return { streams, targets };
 }
