@@ -113,4 +113,24 @@
         <priority>0.8</priority>
     </url>
 
+    <url>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=delete-pages</loc>
+    </url>
+
+    <url>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=reorder-pages</loc>
+    </url>
+
+    <url>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=extract-pages</loc>
+    </url>
+
+    <url>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=crop</loc>
+    </url>
+
+    <url>
+        <loc>https://pdf-galaxy-pro.vercel.app/?tool=sign</loc>
+    </url>
+
 </urlset>

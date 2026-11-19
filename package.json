@@ -16,6 +16,7 @@
     "http-proxy-middleware": "^4.2.0",
     "jsqr": "^1.4.0",
     "jszip": "^3.10.2",
+    "pdf-lib": "1.17.1",
     "qr-code-styling": "^1.9.2",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",

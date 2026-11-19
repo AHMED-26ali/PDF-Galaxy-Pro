@@ -1,6 +1,8 @@
 import { Tool } from './types';
 import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, AddWatermarkPdf, QrCodeGenerator } from './tools';
-import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, TagIcon, QrCodeIcon } from './components/icons';
+import { DeletePdfPages, ExtractPdfPages, ReorderPdfPages } from './tools/pdf-pages/OrganizePdfPages';
+import { CropPdfPages, SignPdf } from './tools/pdf-pages/EditPdfPage';
+import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, TagIcon, QrCodeIcon, TrashIcon, ViewfinderCircleIcon, PencilSquareIcon } from './components/icons';
 
 export const tools: Tool[] = [
     {
@@ -141,5 +143,55 @@ export const tools: Tool[] = [
         categoryLabel: 'إنشاء ورموز',
         colorTheme: 'violet',
         badge: 'جديد ومميز'
+    },
+    {
+        id: 'delete-pages',
+        title: 'حذف صفحات PDF',
+        description: 'اختر الصفحات التي تريد حذفها واحفظ باقي الصفحات في ملف PDF جديد.',
+        icon: TrashIcon,
+        component: DeletePdfPages,
+        category: 'organize',
+        categoryLabel: 'تنظيم المستندات',
+        colorTheme: 'sky',
+    },
+    {
+        id: 'reorder-pages',
+        title: 'إعادة ترتيب صفحات PDF',
+        description: 'عاين الصفحات وغيّر ترتيبها أو اعكس ترتيب المستند بالكامل.',
+        icon: ListBulletIcon,
+        component: ReorderPdfPages,
+        category: 'organize',
+        categoryLabel: 'تنظيم المستندات',
+        colorTheme: 'sky',
+    },
+    {
+        id: 'extract-pages',
+        title: 'استخراج صفحات PDF',
+        description: 'حدّد الصفحات المطلوبة واجمعها في ملف PDF واحد قابل للتنزيل.',
+        icon: DocumentDuplicateIcon,
+        component: ExtractPdfPages,
+        category: 'extract',
+        categoryLabel: 'قراءة واستخراج',
+        colorTheme: 'amber',
+    },
+    {
+        id: 'crop',
+        title: 'قص هوامش PDF',
+        description: 'اضبط هوامش صفحة واحدة أو جميع الصفحات وعاين حدود القص قبل التحميل.',
+        icon: ViewfinderCircleIcon,
+        component: CropPdfPages,
+        category: 'organize',
+        categoryLabel: 'تنظيم المستندات',
+        colorTheme: 'sky',
+    },
+    {
+        id: 'sign',
+        title: 'إضافة توقيع إلى PDF',
+        description: 'أضف صورة توقيع مرئي بصيغة PNG أو JPG وحدّد حجمها ومكانها على الصفحة.',
+        icon: PencilSquareIcon,
+        component: SignPdf,
+        category: 'organize',
+        categoryLabel: 'تنظيم المستندات',
+        colorTheme: 'violet',
     },
 ];
