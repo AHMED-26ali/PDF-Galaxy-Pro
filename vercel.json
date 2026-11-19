@@ -3,6 +3,17 @@
   "cleanUrls": true,
   "redirects": [
     {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "pdf-galaxy-pro.vercel.app"
+        }
+      ],
+      "destination": "https://pdfix-tools.vercel.app/",
+      "statusCode": 301
+    },
+    {
       "source": "/:path*",
       "has": [
         {
