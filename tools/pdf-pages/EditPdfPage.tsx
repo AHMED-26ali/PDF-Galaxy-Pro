@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { canvasToBlob, clearCanvas } from '../pdfRuntime';
 import PdfPagePreview from './PdfPagePreview';
+import FreeCropSelection from './FreeCropSelection';
 import { cropPage, getSignatureRectangle, getVisiblePage, type Edges } from './pdfOperations';
 import { PdfDownload, PdfWorkspace, field, outputFilename, secondaryButton, type OpenPdf } from './PdfWorkspace';
 
@@ -31,12 +32,18 @@ function PagePicker({ count, selected, onChange }: {
 }
 
 function CropPageEditor({ file }: { file: OpenPdf }) {
+    const [method, setMethod] = useState<'free' | 'margins'>('free');
     const [pageIndex, setPageIndex] = useState(0);
     const [applyToAll, setApplyToAll] = useState(false);
     const [edges, setEdges] = useState<Edges>(initialEdges);
     const pageCount = file.document.getPageCount();
     const valid = edges.top + edges.bottom < 100 && edges.left + edges.right < 100;
     const changed = edgeKeys.some(edge => edges[edge] > 0);
+
+    function selectMethod(next: typeof method) {
+        if (next === 'free' && !valid) setEdges(initialEdges);
+        setMethod(next);
+    }
 
     async function save() {
         const { PDFDocument } = await import('pdf-lib');
@@ -48,52 +55,70 @@ function CropPageEditor({ file }: { file: OpenPdf }) {
 
     return (
         <div className="space-y-4">
-            <div className="grid items-start gap-4 md:grid-cols-2">
-                <div className="space-y-4">
-                    <PagePicker count={pageCount} selected={pageIndex} onChange={setPageIndex} />
-                    <fieldset className="grid grid-cols-2 gap-3">
-                        <legend className="mb-2 text-sm font-bold text-slate-800">الهامش المطلوب قصّه من كل جهة (%)</legend>
-                        {edgeKeys.map(edge => (
-                            <label key={edge} className="space-y-1 text-sm font-bold text-slate-700">
-                                <span>{edgeLabels[edge]}</span>
-                                <input
-                                    type="number"
-                                    min={0}
-                                    max={99}
-                                    step={0.1}
-                                    value={edges[edge]}
-                                    className={field}
-                                    onChange={event => {
-                                        const value = Math.min(99, Math.max(0, Number(event.currentTarget.value) || 0));
-                                        setEdges(current => ({ ...current, [edge]: value }));
-                                    }}
-                                />
+            <div role="group" aria-label="طريقة القص" className="flex w-fit flex-wrap gap-1 rounded-2xl bg-slate-100 p-1">
+                {([['free', 'قص يدوي حر'], ['margins', 'قص بالنسب']] as const).map(([id, label]) => (
+                    <button
+                        key={id}
+                        type="button"
+                        aria-pressed={id === method}
+                        onClick={() => selectMethod(id)}
+                        className={`rounded-xl px-4 py-2 text-sm font-bold ${id === method ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                        {label}
+                    </button>
+                ))}
+            </div>
+            <div className={`grid items-start gap-4 ${method === 'margins' ? 'md:grid-cols-2' : ''}`}>
+                <div className="min-w-0 space-y-4">
+                    <div className={`grid gap-3 ${method === 'free' ? 'sm:grid-cols-2 sm:items-end' : ''}`}>
+                        <PagePicker count={pageCount} selected={pageIndex} onChange={setPageIndex} />
+                        {pageCount > 1 && (
+                            <label className="flex min-h-10 items-center gap-2 text-sm font-bold text-slate-800">
+                                <input type="checkbox" className="h-5 w-5 accent-blue-600" checked={applyToAll} onChange={event => setApplyToAll(event.currentTarget.checked)} />
+                                تطبيق نفس النسب على جميع الصفحات
                             </label>
-                        ))}
-                    </fieldset>
-                    <button type="button" disabled={!changed} className={secondaryButton} onClick={() => setEdges(initialEdges)}>إعادة ضبط الهوامش</button>
-                    {pageCount > 1 && (
-                        <label className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                            <input type="checkbox" className="h-5 w-5 accent-blue-600" checked={applyToAll} onChange={event => setApplyToAll(event.currentTarget.checked)} />
-                            تطبيق نفس النسب على جميع الصفحات
-                        </label>
+                        )}
+                    </div>
+                    {method === 'margins' ? (
+                        <fieldset className="grid grid-cols-2 gap-3">
+                            <legend className="mb-2 text-sm font-bold text-slate-800">الهامش المطلوب قصّه من كل جهة (%)</legend>
+                            {edgeKeys.map(edge => (
+                                <label key={edge} className="space-y-1 text-sm font-bold text-slate-700">
+                                    <span>{edgeLabels[edge]}</span>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={99}
+                                        step={0.1}
+                                        value={edges[edge]}
+                                        className={field}
+                                        onChange={event => {
+                                            const value = Math.min(99, Math.max(0, Number(event.currentTarget.value) || 0));
+                                            setEdges(current => ({ ...current, [edge]: value }));
+                                        }}
+                                    />
+                                </label>
+                            ))}
+                        </fieldset>
+                    ) : (
+                        <p className="text-sm text-slate-700">اسحب لتحديد الجزء اللي عايز تحتفظ به. حرّك التحديد من المنتصف أو غيّر حجمه من الحواف والزوايا.</p>
                     )}
+                    <button type="button" disabled={!changed} className={secondaryButton} onClick={() => setEdges(initialEdges)}>إعادة ضبط القص</button>
                     {!valid && <p role="alert" className="text-sm font-bold text-red-700">مجموع الهامشين المتقابلين لازم يكون أقل من 100٪.</p>}
-                    <p className="text-sm text-slate-600">القص يغيّر حدود العرض والطباعة. محتوى الهوامش يظل داخل الملف.</p>
                 </div>
-                <PdfPagePreview bytes={file.bytes} pageNumber={pageIndex + 1}>
-                    {valid && changed && (
+                <PdfPagePreview bytes={file.bytes} pageNumber={pageIndex + 1} expanded={method === 'free'}>
+                    {method === 'free' ? (
+                        <FreeCropSelection edges={edges} onChange={setEdges} selected={changed} />
+                    ) : valid && changed && (
                         <div
-                            aria-hidden
-                            className="pointer-events-none absolute border-2 border-blue-500"
-                            style={{
-                                top: `${edges.top}%`, right: `${edges.right}%`, bottom: `${edges.bottom}%`, left: `${edges.left}%`,
-                                boxShadow: '0 0 0 100vmax rgb(15 23 42 / 0.55)',
-                            }}
+                            aria-hidden="true"
+                            className="pointer-events-none absolute border-2 border-sky-400 shadow-[0_0_0_100vmax_rgba(15,23,42,0.60)]"
+                            style={{ top: `${edges.top}%`, right: `${edges.right}%`, bottom: `${edges.bottom}%`, left: `${edges.left}%` }}
                         />
                     )}
                 </PdfPagePreview>
             </div>
+            <p className="text-sm text-slate-600">القص يغيّر حدود العرض والطباعة. محتوى الهوامش يظل داخل الملف.</p>
             <PdfDownload disabled={!valid || !changed} filename={outputFilename(file, 'cropped')} save={save} />
         </div>
     );

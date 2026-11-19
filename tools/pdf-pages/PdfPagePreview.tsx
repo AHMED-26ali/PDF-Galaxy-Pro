@@ -2,10 +2,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 
 import { clearCanvas, openPdf, renderPdfPage, type PDFDocumentProxy } from '../pdfRuntime';
 
-export default function PdfPagePreview({ bytes, pageNumber, children }: {
+export default function PdfPagePreview({ bytes, pageNumber, children, expanded = false }: {
     bytes: Uint8Array;
     pageNumber: number;
     children?: ReactNode;
+    expanded?: boolean;
 }) {
     const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
     const [image, setImage] = useState<{ pageNumber: number; src: string } | null>(null);
@@ -61,7 +62,7 @@ export default function PdfPagePreview({ bytes, pageNumber, children }: {
                 <p role="status" className="text-center text-sm text-slate-700">تعذّر عرض المعاينة. يمكنك متابعة العمل باستخدام رقم الصفحة.</p>
             ) : image?.pageNumber === pageNumber ? (
                 <div dir="ltr" className="relative mx-auto w-fit max-w-full overflow-hidden bg-white shadow-sm">
-                    <img alt={`معاينة محتوى الصفحة ${pageNumber}`} src={image.src} className="block h-auto max-h-[440px] w-auto max-w-full" />
+                    <img alt={`معاينة محتوى الصفحة ${pageNumber}`} src={image.src} draggable={false} className={`block h-auto w-auto max-w-full ${expanded ? 'max-h-[min(72vh,740px)]' : 'max-h-[440px]'}`} />
                     {children}
                 </div>
             ) : (

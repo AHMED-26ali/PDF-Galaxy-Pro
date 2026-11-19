@@ -3,6 +3,7 @@ import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { LockClosedIcon, ShieldCheckIcon, EyeSlashIcon, SparklesIcon, ArrowDownTrayIcon, ChevronRightIcon, ChevronLeftIcon, TrashIcon } from '../components/icons';
 
+import { paintRedactions, type RedactionStyle } from './redactionMask';
 import { canvasToBlob, clearCanvas, downloadFile as download, pdfError, renderPdfPage, withPdf } from './pdfRuntime';
 
 type ProtectionMode = 'password' | 'redact' | 'flatten';
@@ -52,9 +53,10 @@ const ProtectPdf: React.FC = () => {
     const [totalPages, setTotalPages] = useState(1);
     const [currentPage, setCurrentPage] = useState(1);
     const [redactions, setRedactions] = useState<RedactionBox[]>([]);
-    const [redactColor, setRedactColor] = useState<'black' | 'white'>('black');
+    const [redactStyle, setRedactStyle] = useState<RedactionStyle>('frosted');
     const [draft, setDraft] = useState<Region | null>(null);
-    const [preview, setPreview] = useState<{ file: File; page: number; url: string } | null>(null);
+    const [preview, setPreview] = useState<{ file: File; page: number; canvas: HTMLCanvasElement } | null>(null);
+    const previewCanvas = useRef<HTMLCanvasElement>(null);
     const drawStart = useRef<Point | null>(null);
 
     const onFilesSelected = useCallback((files: File[]) => {
@@ -71,17 +73,34 @@ const ProtectPdf: React.FC = () => {
     useEffect(() => {
         if (!file || mode !== 'redact') return;
         let active = true;
+        let canvas: HTMLCanvasElement | undefined;
         withPdf(file, async pdf => {
             if (!active) return;
             setTotalPages(pdf.numPages);
-            const canvas = await renderPdfPage(await pdf.getPage(currentPage), 1.5, 1050);
-            if (active) setPreview({ file, page: currentPage, url: canvas.toDataURL('image/png') });
-            clearCanvas(canvas);
+            canvas = await renderPdfPage(await pdf.getPage(currentPage), 1.5, 1050);
+            if (active) setPreview({ file, page: currentPage, canvas });
+            else clearCanvas(canvas);
         }).catch(error => {
             if (active) setError(pdfError(error, 'تعذّر عرض الصفحة. تأكد من سلامة ملف PDF.'));
         });
-        return () => { active = false; };
+        return () => {
+            active = false;
+            if (canvas) clearCanvas(canvas);
+        };
     }, [file, currentPage, mode]);
+
+    const currentPreview = preview?.file === file && preview.page === currentPage && preview.canvas.width ? preview : null;
+    useEffect(() => {
+        const target = previewCanvas.current;
+        if (!target || mode !== 'redact' || !currentPreview?.canvas.width) return;
+        const source = currentPreview.canvas;
+        target.width = source.width;
+        target.height = source.height;
+        const context = target.getContext('2d');
+        if (!context) return;
+        context.drawImage(source, 0, 0);
+        paintRedactions(target, redactions.filter(box => box.page === currentPage), redactStyle);
+    }, [currentPreview, currentPage, mode, redactions, redactStyle]);
 
     function startSelection(event: React.PointerEvent<HTMLDivElement>) {
         if (!event.isPrimary || event.button !== 0 || isLoading) return;
@@ -171,16 +190,7 @@ const ProtectPdf: React.FC = () => {
                     const canvas = await renderPdfPage(source, 2.5);
                     try {
                         if (redact) {
-                            const context = canvas.getContext('2d');
-                            if (!context) throw new Error('Canvas unavailable');
-                            context.fillStyle = redactColor === 'black' ? '#000' : '#fff';
-                            for (const box of redactions.filter(box => box.page === number)) {
-                                const x = Math.floor(box.x * canvas.width);
-                                const y = Math.floor(box.y * canvas.height);
-                                const width = Math.ceil((box.x + box.width) * canvas.width) - x;
-                                const height = Math.ceil((box.y + box.height) * canvas.height) - y;
-                                context.fillRect(x, y, width, height);
-                            }
+                            paintRedactions(canvas, redactions.filter(box => box.page === number), redactStyle);
                         }
                         const image = await output.embedPng(await (await canvasToBlob(canvas)).arrayBuffer());
                         const page = output.addPage([size.width, size.height]);
@@ -363,25 +373,27 @@ const ProtectPdf: React.FC = () => {
                         <div className="space-y-6">
                             {/* Toolbar */}
                             <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-white rounded-2xl border border-slate-200 shadow-sm">
-                                <div className="flex items-center gap-3">
-                                    <span className="text-xs font-bold text-slate-700">لون الحجب:</span>
-                                    <div className="inline-flex rounded-xl p-1 bg-slate-100 border border-slate-200">
-                                        <button
-                                            onClick={() => setRedactColor('black')}
-                                            className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-                                                redactColor === 'black' ? 'bg-black text-white shadow-xs' : 'text-slate-600'
-                                            }`}
-                                        >
-                                            أسود أمني
-                                        </button>
-                                        <button
-                                            onClick={() => setRedactColor('white')}
-                                            className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-                                                redactColor === 'white' ? 'bg-white text-slate-800 shadow-xs' : 'text-slate-600'
-                                            }`}
-                                        >
-                                            أبيض مخفي
-                                        </button>
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <span className="text-xs font-bold text-slate-700">شكل التعتيم</span>
+                                    <div className="inline-flex flex-wrap rounded-xl border border-slate-200 bg-slate-100 p-1">
+                                        {([
+                                            ['frosted', 'زجاجي'],
+                                            ['black', 'أسود'],
+                                            ['white', 'أبيض'],
+                                        ] as const).map(([style, label]) => (
+                                            <button
+                                                key={style}
+                                                type="button"
+                                                aria-pressed={redactStyle === style}
+                                                disabled={isLoading}
+                                                onClick={() => setRedactStyle(style)}
+                                                className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${redactStyle === style
+                                                    ? 'bg-white text-indigo-700 shadow-sm'
+                                                    : 'text-slate-600 hover:text-slate-900'}`}
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
                                     </div>
 
                                     <span className="text-xs text-slate-400">|</span>
@@ -438,7 +450,7 @@ const ProtectPdf: React.FC = () => {
                                     اسحب فوق المنطقة التي تريد تعتيمها بالماوس أو بإصبعك.
                                 </p>
 
-                                {preview?.file === file && preview.page === currentPage ? (
+                                {currentPreview ? (
                                     <div
                                         aria-label="معاينة لتحديد مناطق التعتيم"
                                         className="relative w-fit max-w-full cursor-crosshair touch-none select-none overflow-hidden rounded-lg bg-white"
@@ -448,16 +460,19 @@ const ProtectPdf: React.FC = () => {
                                         onPointerCancel={clearSelection}
                                         onLostPointerCapture={clearSelection}
                                     >
-                                        <img src={preview.url} alt={`معاينة صفحة ${currentPage}`} draggable={false} className="pointer-events-none block h-auto max-w-full" />
-                                        {redactions.filter(box => box.page === currentPage).map(box => (
+                                        <canvas
+                                            ref={previewCanvas}
+                                            role="img"
+                                            aria-label={`معاينة صفحة ${currentPage}`}
+                                            className="pointer-events-none block h-auto max-w-full"
+                                        />
+                                        {draft && (
                                             <div
-                                                key={box.id}
                                                 aria-hidden="true"
-                                                className={`pointer-events-none absolute border border-slate-400 ${redactColor === 'black' ? 'bg-black' : 'bg-white'}`}
-                                                style={boxStyle(box)}
+                                                className="pointer-events-none absolute border border-indigo-500 bg-white/25 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.75)] backdrop-blur-sm"
+                                                style={boxStyle(draft)}
                                             />
-                                        ))}
-                                        {draft && <div className="pointer-events-none absolute border-2 border-indigo-500 bg-indigo-500/30" style={boxStyle(draft)} />}
+                                        )}
                                     </div>
                                 ) : (
                                     <p role="status" className="text-sm text-slate-600">{error ? 'معاينة الصفحة غير متاحة.' : 'جاري عرض الصفحة…'}</p>
