@@ -1,6 +1,7 @@
 import { Tool } from './types';
 import EditorEntry from './tools/pdf-editor/EditorEntry';
 import { MergePdf, SplitPdf, CompressPdf, RotatePdf, AddPageNumbersPdf, OcrPdf, PdfToWord, ProtectPdf, ImageToPdf, PdfToImage, ExtractText, AddWatermarkPdf, QrCodeGenerator } from './tools';
+import ScanDocument from './tools/document-scan/ScanDocument';
 import { DeletePdfPages, ExtractPdfPages, ReorderPdfPages } from './tools/pdf-pages/OrganizePdfPages';
 import { CropPdfPages, SignPdf } from './tools/pdf-pages/EditPdfPage';
 import { DocumentDuplicateIcon, ArrowsRightLeftIcon, ArchiveBoxArrowDownIcon, ArrowPathIcon, ListBulletIcon, MagnifyingGlassIcon, DocumentTextIcon, ShieldCheckIcon, PhotoIcon, RectangleStackIcon, DocumentMinusIcon, TagIcon, QrCodeIcon, TrashIcon, ViewfinderCircleIcon, PencilSquareIcon } from './components/icons';
@@ -59,6 +60,16 @@ export const tools: Tool[] = [
         categoryLabel: 'تحويل وتصدير',
         colorTheme: 'indigo',
         badge: 'مدمج، مفرد، أو ZIP'
+    },
+    {
+        id: 'document-scan',
+        title: 'تحويل صورة المستند إلى سكان',
+        description: 'عدّل ميل الورقة، واقصص الخلفية، ووضّح الكتابة في صور المستندات. احفظ النتيجة JPG أو PDF.',
+        icon: ViewfinderCircleIcon,
+        component: ScanDocument,
+        category: 'convert',
+        categoryLabel: 'تحويل وتصدير',
+        colorTheme: 'indigo',
     },
     {
         id: 'pdf-to-image',

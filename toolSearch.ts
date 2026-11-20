@@ -24,6 +24,10 @@ export const toolSearchPages: Record<string, ToolSearchPage> = {
         title: 'تحويل الصور إلى PDF أونلاين',
         description: 'رتّب صور JPG وPNG وغيرها واضبط مقاس الصفحات. نزّل الصور في PDF واحد أو في ملفات PDF منفردة.',
     },
+    'document-scan': {
+        title: 'تحويل صورة المستند إلى سكان PDF أو JPG أونلاين',
+        description: 'صحّح ميل الورقة، وأزل الخلفية وخفّف الظلال في صور المستندات. عاين النتيجة ونزّل سكان JPG أو PDF بحجم A4.',
+    },
     'pdf-to-image': {
         title: 'تحويل PDF إلى صور JPG أو PNG أو WebP',
         description: 'اختر نطاق الصفحات والدقة، ثم نزّل الصور الناتجة منفردة أو مجمّعة في ZIP أو في صورة واحدة.',
