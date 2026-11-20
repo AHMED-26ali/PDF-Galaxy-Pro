@@ -1,15 +1,41 @@
 import React, { useEffect, useRef, useState } from 'react';
-import FileUploader from '../../components/FileUploader';
+import { ArrowUpTrayIcon, PhotoIcon } from '../../components/icons';
 import { detectCorners, imageCorners, validCorners, type Corners, type Point, type ScanMode } from './scanImage';
 
 type Source = { url: string; fileName: string; canvas: HTMLCanvasElement; detected: Corners };
 type Scan = { url: string; blob: Blob; width: number; height: number };
 
-const fileTypes = 'image/jpeg,image/png,image/webp';
-const takePhotoTypes = fileTypes.split(',');
+const galleryTypes = 'image/*,.heic,.heif';
+const heicExtension = /\.hei[cf]$/i;
+const heicMime = /^image\/hei[cf](?:-sequence)?$/i;
 const labels = ['الركن العلوي الأيسر', 'الركن العلوي الأيمن', 'الركن السفلي الأيمن', 'الركن السفلي الأيسر'];
 const primaryButton = 'rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50';
 const secondaryButton = 'rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-blue-400 hover:text-blue-700 disabled:opacity-50';
+
+async function loadImage(blob: Blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+        return { image, url };
+    } catch (error) {
+        URL.revokeObjectURL(url);
+        throw error;
+    }
+}
+
+async function openPhoto(file: File) {
+    try {
+        return await loadImage(file);
+    } catch (error) {
+        if (!heicExtension.test(file.name) && !heicMime.test(file.type)) throw error;
+        /*! HEIC decoder heic-to, LGPL-3.0-or-later. See /licenses/heic-to.txt. */
+        const { heicTo } = await import('heic-to/csp');
+        const photo = await heicTo({ blob: file, type: 'image/jpeg', quality: 0.97 });
+        return loadImage(photo);
+    }
+}
 
 function imageCanvas(image: CanvasImageSource, width: number, height: number, maxSide: number) {
     const scale = Math.min(1, maxSide / Math.max(width, height));
@@ -91,37 +117,47 @@ const ScanDocument: React.FC = () => {
         }
     }
 
-    async function selectFile([file]: File[]) {
+    async function selectFile(file?: File) {
         if (!file) return;
-        if (file.type && !takePhotoTypes.includes(file.type)) {
-            setError('اختر صورة بصيغة JPG أو PNG أو WebP.');
+        const hasImageType = !file.type || file.type === 'application/octet-stream'
+            || (file.type.startsWith('image/') && file.type !== 'image/svg+xml');
+        if (!hasImageType && !heicExtension.test(file.name)) {
+            setError('اختر صورة للورقة من المعرض أو التقطها بالكاميرا.');
             return;
         }
         const current = ++job.current;
         setStatus('loading');
         setError('');
-        const url = URL.createObjectURL(file);
+        let url: string | undefined;
         try {
-            const image = new Image();
-            image.src = url;
-            await image.decode();
+            const photo = await openPhoto(file);
+            url = photo.url;
             if (job.current !== current) {
                 URL.revokeObjectURL(url);
                 return;
             }
+            const { image } = photo;
             const { canvas } = imageCanvas(image, image.naturalWidth, image.naturalHeight, 3600);
             const preview = imageCanvas(canvas, canvas.width, canvas.height, 384);
             const detected = detectCorners(preview.ctx.getImageData(0, 0, preview.canvas.width, preview.canvas.height));
             setSource({ url, fileName: file.name.replace(/\.[^.]+$/, '') || 'document', canvas, detected });
             setCorners(detected);
+            setView('crop');
             await process(canvas, detected, mode);
         } catch {
-            URL.revokeObjectURL(url);
+            if (url) URL.revokeObjectURL(url);
             if (job.current === current) {
-                setError('تعذّر فتح الصورة. جرّب اختيار صورة أخرى بصيغة JPG أو PNG أو WebP.');
+                setError('تعذّر فتح الصورة. جرّب صورة JPG أو PNG أو HEIC سليمة، أو التقط صورة جديدة.');
                 setStatus('idle');
             }
         }
+    }
+
+    function handlePhotoInput(event: React.ChangeEvent<HTMLInputElement>) {
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = '';
+        void selectFile(file);
     }
 
     function changeCorners(next: Corners) {
@@ -173,18 +209,29 @@ const ScanDocument: React.FC = () => {
     return (
         <div className="space-y-5">
             {!source && status !== 'loading' && (
-                <>
-                    <div role="button" tabIndex={0} aria-label="اختيار صورة المستند"
-                        className="rounded-3xl focus-visible:ring-2 focus-visible:ring-blue-600 [&_span.font-mono]:break-all"
-                        onKeyDown={event => {
-                            if (event.key !== 'Enter' && event.key !== ' ') return;
-                            event.preventDefault();
-                            (event.currentTarget as HTMLDivElement).querySelector<HTMLInputElement>('input[type="file"]')?.click();
-                        }}>
-                        <FileUploader onFilesSelected={selectFile} accept=".jpg,.jpeg,.png,.webp" />
+                <section aria-label="رفع صورة المستند"
+                    className="rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-5 text-center sm:p-10"
+                    onDragOver={event => event.preventDefault()}
+                    onDrop={event => {
+                        event.preventDefault();
+                        void selectFile(event.dataTransfer.files[0]);
+                    }}>
+                    <h2 className="text-xl font-black text-slate-900 sm:text-2xl">ارفع صورة الورقة</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-600">اختر صورة من الموبايل أو التقطها بالكاميرا. يمكنك أيضًا سحب الصورة وإفلاتها هنا.</p>
+                    <div className="mt-5 flex flex-wrap justify-center gap-3">
+                        <label className={primaryButton + ' inline-flex cursor-pointer items-center justify-center gap-2 focus-within:ring-2 focus-within:ring-blue-700 focus-within:ring-offset-2'}>
+                            <ArrowUpTrayIcon className="h-5 w-5" />
+                            اختيار صورة من المعرض
+                            <input className="sr-only" type="file" accept={galleryTypes} onChange={handlePhotoInput} />
+                        </label>
+                        <label className={secondaryButton + ' inline-flex cursor-pointer items-center justify-center gap-2 focus-within:ring-2 focus-within:ring-blue-700 focus-within:ring-offset-2'}>
+                            <PhotoIcon className="h-5 w-5" />
+                            تصوير الورقة بالكاميرا
+                            <input className="sr-only" type="file" accept="image/*" capture="environment" onChange={handlePhotoInput} />
+                        </label>
                     </div>
-                    <p className="text-center text-sm text-slate-600">تُعالج الصورة داخل متصفحك على جهازك.</p>
-                </>
+                    <p className="mt-4 text-xs text-slate-600">يدعم صور JPG وPNG وWebP وHEIC. تُعالج الصورة على جهازك.</p>
+                </section>
             )}
             {source && (
                 <>
@@ -252,14 +299,33 @@ const ScanDocument: React.FC = () => {
                                 </div>
                             </>
                         ) : scan && (
-                            <img src={scan.url} alt="معاينة السكان بعد التحسين" className="mx-auto block max-h-[660px] max-w-full rounded bg-white shadow-sm" />
+                            <section aria-labelledby="scan-result-title">
+                                <h2 id="scan-result-title" className="mb-4 text-center text-lg font-black text-slate-900">
+                                    معاينة الملف بعد التحسين
+                                </h2>
+                                <img src={scan.url} alt="معاينة السكان بعد التحسين"
+                                    className="mx-auto block h-auto max-h-[660px] max-w-full rounded bg-white object-contain shadow-sm" />
+                                <div className="mt-5 flex flex-wrap justify-center gap-3">
+                                    <a className={secondaryButton} href={scan.url} download={source.fileName + '-scan.jpg'}>
+                                        تنزيل كصورة JPG
+                                    </a>
+                                    <button type="button" className={primaryButton} disabled={busy} onClick={downloadPdf}>
+                                        تنزيل كملف PDF بحجم A4
+                                    </button>
+                                </div>
+                            </section>
                         )}
                     </div>
                     <div className="flex flex-wrap items-end gap-3">
                         <label className="grid gap-1 text-sm font-bold text-slate-700">
                             وضع التحسين
                             <select className="rounded-xl border border-slate-200 bg-white px-3 py-2.5" value={mode} disabled={busy}
-                                onChange={event => { setMode(event.target.value as ScanMode); setScan(null); setView('crop'); }}>
+                                onChange={event => {
+                                    const nextMode = event.target.value as ScanMode;
+                                    setMode(nextMode);
+                                    if (view === 'scan') void process(source.canvas, corners, nextMode);
+                                    else setScan(null);
+                                }}>
                                 <option value="grayscale">أبيض وأسود</option>
                                 <option value="color">ألوان محسّنة</option>
                             </select>
@@ -267,12 +333,6 @@ const ScanDocument: React.FC = () => {
                         {(!scan || view === 'crop') && (
                             <button type="button" className={primaryButton} disabled={busy}
                                 onClick={() => process(source.canvas, corners, mode)}>تحسين الصورة</button>
-                        )}
-                        {scan && (
-                            <>
-                                <a className={secondaryButton} href={scan.url} download={source.fileName + '-scan.jpg'}>تنزيل JPG</a>
-                                <button type="button" className={primaryButton} disabled={busy} onClick={downloadPdf}>تنزيل PDF بحجم A4</button>
-                            </>
                         )}
                     </div>
                 </>
