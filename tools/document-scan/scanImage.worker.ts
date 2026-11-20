@@ -1,8 +1,8 @@
-import { renderScan, type Corners, type ScanMode } from './scanImage';
+import { renderScan, type Corners, type ScanSettings } from './scanImage';
 
-self.onmessage = ({ data }: MessageEvent<{ image: ImageData; corners: Corners; mode: ScanMode; straighten: boolean }>) => {
+self.onmessage = ({ data }: MessageEvent<{ image: ImageData; corners: Corners; settings: ScanSettings; suggestedCrop: boolean }>) => {
     try {
-        const image = renderScan(data.image, data.corners, data.mode, data.straighten);
+        const image = renderScan(data.image, data.corners, data.settings, data.suggestedCrop);
         self.postMessage({ image }, { transfer: [image.data.buffer] });
     } catch {
         self.postMessage({ error: true });

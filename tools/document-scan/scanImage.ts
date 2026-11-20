@@ -1,8 +1,10 @@
-import { straightenLayout } from './deskew';
+import { layoutAlignment, straightenLayout } from './deskew';
 
 export type Point = { x: number; y: number };
 export type Corners = [Point, Point, Point, Point];
 export type ScanMode = 'grayscale' | 'color';
+export type ScanProfile = 'document' | 'detail';
+export type ScanSettings = { mode: ScanMode; profile: ScanProfile; straighten: boolean };
 type Line = { slope: number; intercept: number };
 
 export const imageCorners: Corners = [
@@ -172,11 +174,33 @@ function exteriorMask(samples: Float32Array, columns: number, rows: number) {
     return mask;
 }
 
-function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
+function documentLighting(fineSamples: Float32Array, fineColumns: number, fineRows: number) {
+    const fineExterior = exteriorMask(fineSamples, fineColumns, fineRows);
+    const shadowMap = new Float32Array(fineSamples.length);
+    for (let y = 0; y < fineRows; y++) {
+        for (let x = 0; x < fineColumns; x++) {
+            const index = y * fineColumns + x;
+            if (fineExterior[index]) continue;
+            let highlight = fineSamples[index];
+            for (let row = Math.max(0, y - 1); row <= Math.min(fineRows - 1, y + 1); row++) {
+                for (let column = Math.max(0, x - 1); column <= Math.min(fineColumns - 1, x + 1); column++) {
+                    highlight = Math.max(highlight, fineSamples[row * fineColumns + column]);
+                }
+            }
+            shadowMap[index] = highlight;
+        }
+    }
+    return { fineExterior, shadowMap };
+}
+
+function cleanPaper({ data, width, height }: ImageData, { mode, profile }: ScanSettings) {
     const columns = Math.min(120, Math.ceil(width / 10));
     const rows = Math.min(120, Math.ceil(height / 10));
     const samples = new Float32Array(columns * rows);
     const paperColor = mode === 'color' ? new Float32Array(samples.length * 3) : null;
+    const fineColumns = Math.min(440, Math.ceil(width / 6));
+    const fineRows = Math.min(440, Math.ceil(height / 6));
+    const fineSamples = profile === 'document' ? new Float32Array(fineColumns * fineRows) : null;
     for (let y = 0; y < height; y += 2) {
         for (let x = 0; x < width; x += 2) {
             const index = Math.floor(y * rows / height) * columns + Math.floor(x * columns / width);
@@ -190,12 +214,17 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
                     paperColor[index * 3 + 2] = data[pixel + 2] / level;
                 }
             }
+            if (fineSamples) {
+                const fineIndex = Math.floor(y * fineRows / height) * fineColumns + Math.floor(x * fineColumns / width);
+                fineSamples[fineIndex] = Math.max(fineSamples[fineIndex], level);
+            }
         }
     }
     // Use light pixels for the lighting map and exclude dark areas that meet the photo border.
     const exterior = exteriorMask(samples, columns, rows);
     const paperSamples = samples.filter((value, index) => !exterior[index] && value > 130).sort();
     const globalPaper = paperSamples.length ? paperSamples[Math.floor((paperSamples.length - 1) * 0.77)] : 245;
+    const document = fineSamples ? documentLighting(fineSamples, fineColumns, fineRows) : null;
     const background = new Float32Array(samples.length);
     const whiteBalance = paperColor ? new Float32Array(paperColor.length) : null;
     for (let y = 0; y < rows; y++) {
@@ -250,12 +279,28 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
             const g = data[pixel + 1];
             const b = data[pixel + 2];
             const level = r * 0.299 + g * 0.587 + b * 0.114;
-            const lightness = level / 255;
-            const paper = globalPaper * 0.8 + Math.max(globalPaper - 24, light) * 0.2;
-            const lift = clamp(249 - paper, 0, 42) * lightness * lightness;
-            const contrast = 26 * lightness * (1 - lightness);
-            // Limit highlight lift so pale printing and picture midtones retain tone separation.
-            const tone = clamp(level + Math.min(lift - contrast, (255 - level) * 0.40), 0, 255);
+            let tone: number;
+            let chromaGain = 1;
+            if (document) {
+                const fineIndex = Math.floor(y * fineRows / height) * fineColumns + Math.floor(x * fineColumns / width);
+                if (document.fineExterior[fineIndex]) {
+                    data[pixel] = data[pixel + 1] = data[pixel + 2] = 255;
+                    continue;
+                }
+                const paperLight = Math.max(light * 0.72, Math.min(light, document.shadowMap[fineIndex]));
+                const relative = level / paperLight;
+                const ink = mode === 'color' ? clamp((relative - 0.031) / 0.924, 0, 1) ** 1.16
+                    : clamp((relative - 0.055) / 0.90, 0, 1) ** 1.22;
+                tone = 255 * ink;
+                chromaGain = 255 / paperLight;
+            } else {
+                const lightness = level / 255;
+                const paper = globalPaper * 0.8 + Math.max(globalPaper - 24, light) * 0.2;
+                const lift = clamp(249 - paper, 0, 42) * lightness * lightness;
+                const contrast = 26 * lightness * (1 - lightness);
+                // Limit highlight lift so pale printing and picture midtones retain tone separation.
+                tone = clamp(level + Math.min(lift - contrast, (255 - level) * 0.40), 0, 255);
+            }
             if (!whiteBalance) {
                 data[pixel] = data[pixel + 1] = data[pixel + 2] = tone;
                 continue;
@@ -269,7 +314,7 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
                 const top = whiteBalance[corner1 + channel] * (1 - fx) + whiteBalance[corner2 + channel] * fx;
                 const bottom = whiteBalance[corner3 + channel] * (1 - fx) + whiteBalance[corner4 + channel] * fx;
                 const balance = top * (1 - fy) + bottom * fy;
-                ratios[channel] = data[pixel + channel] / balance;
+                ratios[channel] = data[pixel + channel] * chromaGain / balance;
             }
             const neutral = ratios[0] * 0.299 + ratios[1] * 0.587 + ratios[2] * 0.114;
             // Apply white balance to chroma separately so it cannot bleach a photograph.
@@ -287,9 +332,42 @@ function fullFrame(corners: Corners) {
     return corners.every((point, index) => point.x === imageCorners[index].x && point.y === imageCorners[index].y);
 }
 
-export function renderScan(input: ImageData, corners: Corners, mode: ScanMode, straighten = true) {
+function conservativeCrop(image: ImageData, corners: Corners): Corners {
+    if (fullFrame(corners)) return imageCorners;
+    const [a, b, c, d] = corners;
+    const left = Math.max(0, Math.min(a.x, d.x) - 0.004);
+    const right = Math.min(1, Math.max(b.x, c.x) + 0.004);
+    const top = Math.max(0, Math.min(a.y, b.y) - 0.011);
+    const bottom = Math.min(1, Math.max(c.y, d.y) + 0.011);
+    const box: Corners = [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }];
+    const variation = Math.max(Math.abs(a.x - d.x), Math.abs(b.x - c.x), Math.abs(a.y - b.y), Math.abs(d.y - c.y));
+    if (variation < 0.022) return box;
+
+    const scale = Math.min(1, 356 / Math.max(image.width, image.height));
+    const reduced = new ImageData(Math.max(2, Math.round(image.width * scale)), Math.max(2, Math.round(image.height * scale)));
+    for (let y = 0; y < reduced.height; y++) {
+        const sy = Math.floor((y + 0.5) * image.height / reduced.height);
+        for (let x = 0; x < reduced.width; x++) {
+            const sx = Math.floor((x + 0.5) * image.width / reduced.width);
+            const source = (sy * image.width + sx) * 4;
+            const target = (y * reduced.width + x) * 4;
+            reduced.data[target] = image.data[source];
+            reduced.data[target + 1] = image.data[source + 1];
+            reduced.data[target + 2] = image.data[source + 2];
+            reduced.data[target + 3] = 255;
+        }
+    }
+
+    const plain = layoutAlignment(warp(reduced, box));
+    const corrected = layoutAlignment(warp(reduced, corners));
+    return corrected >= plain * 1.12 + 12 ? corners : box;
+}
+
+export function renderScan(input: ImageData, corners: Corners, settings: ScanSettings, suggestedCrop = false) {
     if (!validCorners(corners)) throw new Error('Invalid crop');
-    const output = fullFrame(corners) ? input : warp(input, corners);
-    cleanPaper(output, mode);
-    return straighten ? straightenLayout(output) : output;
+    const autoCrop = suggestedCrop && settings.profile === 'document' && settings.straighten;
+    const selection = autoCrop ? conservativeCrop(input, corners) : corners;
+    const output = fullFrame(selection) ? input : warp(input, selection);
+    cleanPaper(output, settings);
+    return settings.straighten ? straightenLayout(output, autoCrop && !fullFrame(corners)) : output;
 }

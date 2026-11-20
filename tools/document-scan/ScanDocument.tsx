@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUpTrayIcon, DocumentTextIcon, PhotoIcon } from '../../components/icons';
 import { canvasToBlob, clearCanvas, downloadFile, openPdf, pdfError, renderPdfPage, type PDFDocumentProxy } from '../pdfRuntime';
 import { scanPageJpeg, type PageSize } from './scanPage';
-import { detectCorners, imageCorners, validCorners, type Corners, type Point, type ScanMode } from './scanImage';
+import { detectCorners, imageCorners, validCorners, type Corners, type Point, type ScanMode, type ScanProfile, type ScanSettings } from './scanImage';
 
 type Source = {
     url: string;
@@ -91,6 +91,8 @@ const ScanDocument: React.FC = () => {
     const pageSelections = useRef(new Map<number, Corners>());
     const [scan, setScan] = useState<Scan | null>(null);
     const [corners, setCorners] = useState<Corners>(imageCorners);
+    const [cropEdited, setCropEdited] = useState(false);
+    const [profile, setProfile] = useState<ScanProfile>('detail');
     const [mode, setMode] = useState<ScanMode>('color');
     const [autoStraighten, setAutoStraighten] = useState(true);
     const [view, setView] = useState<'crop' | 'scan'>('crop');
@@ -99,6 +101,7 @@ const ScanDocument: React.FC = () => {
     const workerRef = useRef<Worker | null>(null);
     const job = useRef(0);
     const photo = useRef<HTMLDivElement>(null);
+    const settings: ScanSettings = { mode, profile, straighten: autoStraighten };
 
     useEffect(() => () => {
         job.current++;
@@ -117,7 +120,7 @@ const ScanDocument: React.FC = () => {
         if (scan) URL.revokeObjectURL(scan.url);
     }, [scan]);
 
-    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode, pixelSize: PageSize, straighten = autoStraighten) {
+    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, pixelSize: PageSize, options: ScanSettings, suggestedCrop = false) {
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas unavailable');
         const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -127,7 +130,7 @@ const ScanDocument: React.FC = () => {
             const result = await new Promise<ImageData>((resolve, reject) => {
                 worker.onmessage = ({ data }) => data.image ? resolve(data.image) : reject(new Error('Scan failed'));
                 worker.onerror = reject;
-                worker.postMessage({ image, corners: selection, mode: scanMode, straighten }, [image.data.buffer]);
+                worker.postMessage({ image, corners: selection, settings: options, suggestedCrop }, [image.data.buffer]);
             });
             return await scanPageJpeg(result, pixelSize);
         } finally {
@@ -136,13 +139,15 @@ const ScanDocument: React.FC = () => {
         }
     }
 
-    async function process(page: Source, selection: Corners, scanMode: ScanMode, straighten = autoStraighten) {
+    async function process(page: Source, selection: Corners, options = settings, manualCrop = cropEdited) {
         const current = ++job.current;
         setStatus('processing');
         setError('');
         setScan(null);
         try {
-            const blob = await scanCanvas(page.canvas, selection, scanMode, page.pixelSize, straighten);
+            const suggestedCrop = options.profile === 'document' && options.straighten && !manualCrop;
+            const crop = suggestedCrop ? page.detected : selection;
+            const blob = await scanCanvas(page.canvas, crop, page.pixelSize, options, suggestedCrop);
             if (job.current !== current) return;
             setScan({ blob, url: URL.createObjectURL(blob) });
             setView('scan');
@@ -201,8 +206,9 @@ const ScanDocument: React.FC = () => {
             setPageNumber(1);
             setSource(next);
             setCorners(imageCorners);
+            setCropEdited(false);
             setView('crop');
-            await process(next, imageCorners, mode);
+            await process(next, imageCorners, settings, false);
         } catch (error) {
             if (url) URL.revokeObjectURL(url);
             if (job.current === current) {
@@ -234,12 +240,14 @@ const ScanDocument: React.FC = () => {
                 clearCanvas(next.canvas);
                 return;
             }
-            const selection = pageSelections.current.get(number) ?? next.detected;
+            const saved = pageSelections.current.get(number);
+            const selection = saved ?? imageCorners;
             setPageNumber(number);
             setSource(next);
             setCorners(selection);
+            setCropEdited(!!saved);
             setView('crop');
-            await process(next, selection, mode);
+            await process(next, selection, settings, !!saved);
         } catch {
             if (job.current === current) {
                 setError('تعذّر فتح الصفحة. جرّب مرة أخرى.');
@@ -249,8 +257,9 @@ const ScanDocument: React.FC = () => {
     }
 
     function changeCorners(next: Corners) {
-        if (!validCorners(next) || next.every((point, index) => point === corners[index])) return;
+        if (!validCorners(next) || (cropEdited && next.every((point, index) => point === corners[index]))) return;
         setCorners(next);
+        setCropEdited(true);
         if (pdfDocument) pageSelections.current.set(pageNumber, next);
         setScan(null);
     }
@@ -284,8 +293,8 @@ const ScanDocument: React.FC = () => {
                     pageSize = pdfSize;
                     try {
                         if (job.current !== current) return;
-                        blob = await scanCanvas(canvas, pageSelections.current.get(number) ?? imageCorners, mode,
-                            { width: canvas.width, height: canvas.height });
+                        blob = await scanCanvas(canvas, pageSelections.current.get(number) ?? imageCorners,
+                            { width: canvas.width, height: canvas.height }, settings);
                     } finally {
                         clearCanvas(canvas);
                     }
@@ -306,10 +315,34 @@ const ScanDocument: React.FC = () => {
         }
     }
 
+    function changeProfile(next: ScanProfile) {
+        if (profile === next) return;
+        setProfile(next);
+        if (source && view === 'scan') void process(source, corners, { ...settings, profile: next });
+        else setScan(null);
+    }
+
     const busy = status !== 'idle';
 
     return (
         <div className="space-y-5">
+            <fieldset disabled={busy}>
+                <legend className="mb-2 text-sm font-bold text-slate-700">نوع المعالجة</legend>
+                <div className="grid gap-2 sm:grid-cols-2">
+                    <button type="button" aria-pressed={profile === 'document'}
+                        className={(profile === 'document' ? primaryButton : secondaryButton) + ' text-start leading-relaxed'}
+                        onClick={() => changeProfile('document')}>
+                        <span className="block">سكان مستند</span>
+                        <span className="block text-xs font-normal">للفواتير والبيانات · تقليل الظلال وتفتيح الورق</span>
+                    </button>
+                    <button type="button" aria-pressed={profile === 'detail'}
+                        className={(profile === 'detail' ? primaryButton : secondaryButton) + ' text-start leading-relaxed'}
+                        onClick={() => changeProfile('detail')}>
+                        <span className="block">حفظ الصور والتفاصيل</span>
+                        <span className="block text-xs font-normal">للجوازات والهويات · الحفاظ على تفاصيل الصور</span>
+                    </button>
+                </div>
+            </fieldset>
             {!source && status !== 'loading' && (
                 <section aria-label="رفع المستند"
                     className="rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-5 text-center sm:p-10"
@@ -354,7 +387,7 @@ const ScanDocument: React.FC = () => {
                             </button>
                         </div>
                         <button type="button" className={secondaryButton} disabled={busy}
-                            onClick={() => { setSource(null); setPdfDocument(null); setScan(null); setView('crop'); setError(''); }}>
+                            onClick={() => { setSource(null); setPdfDocument(null); setScan(null); setProfile('detail'); setView('crop'); setError(''); }}>
                             اختيار ملف آخر
                         </button>
                     </div>
@@ -442,7 +475,7 @@ const ScanDocument: React.FC = () => {
                                 onChange={event => {
                                     const nextMode = event.target.value as ScanMode;
                                     setMode(nextMode);
-                                    if (view === 'scan') void process(source, corners, nextMode);
+                                    if (view === 'scan') void process(source, corners, { ...settings, mode: nextMode });
                                     else setScan(null);
                                 }}>
                                 <option value="grayscale">أبيض وأسود</option>
@@ -454,14 +487,14 @@ const ScanDocument: React.FC = () => {
                                 onChange={event => {
                                     const enabled = event.target.checked;
                                     setAutoStraighten(enabled);
-                                    if (view === 'scan') void process(source, corners, mode, enabled);
+                                    if (view === 'scan') void process(source, corners, { ...settings, straighten: enabled });
                                     else setScan(null);
                                 }} />
                             تصحيح الميل تلقائيًا
                         </label>
                         {(!scan || view === 'crop') && (
                             <button type="button" className={primaryButton} disabled={busy}
-                                onClick={() => process(source, corners, mode)}>تحسين الصورة</button>
+                                onClick={() => process(source, corners)}>تحسين الصورة</button>
                         )}
                     </div>
                 </>
