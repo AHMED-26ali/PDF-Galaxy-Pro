@@ -16,8 +16,7 @@ function contentBounds({ width, height, data }: ImageData) {
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const pixel = (y * width + x) * 4;
-            const level = data[pixel] * 0.299 + data[pixel + 1] * 0.587 + data[pixel + 2] * 0.114;
-            if (level < 222) {
+            if (Math.min(data[pixel], data[pixel + 1], data[pixel + 2]) < 252) {
                 rows[y]++;
                 columns[x]++;
             }
@@ -58,7 +57,8 @@ function sharpenText(context: CanvasRenderingContext2D, width: number, height: n
             const soft = (ink[index - radius] + ink[index + radius] + ink[index - stride] + ink[index + stride]) / 4;
             const detail = level - soft;
             if (Math.abs(detail) < 4) continue;
-            const correction = Math.max(-48, Math.min(22, detail * (detail < 0 ? 0.9 : 0.48)));
+            const upper = Math.min(14, (255 - level) * 0.35);
+            const correction = Math.max(-26, Math.min(upper, detail * (detail < 0 ? 0.75 : 0.45)));
             const pixel = index * 4;
             for (let channel = 0; channel < 3; channel++) image.data[pixel + channel] += correction;
         }

@@ -91,7 +91,7 @@ const ScanDocument: React.FC = () => {
     const pageSelections = useRef(new Map<number, Corners>());
     const [scan, setScan] = useState<Scan | null>(null);
     const [corners, setCorners] = useState<Corners>(imageCorners);
-    const [mode, setMode] = useState<ScanMode>('grayscale');
+    const [mode, setMode] = useState<ScanMode>('color');
     const [autoStraighten, setAutoStraighten] = useState(true);
     const [view, setView] = useState<'crop' | 'scan'>('crop');
     const [status, setStatus] = useState<'idle' | 'loading' | 'processing' | 'pdf'>('idle');
@@ -117,7 +117,7 @@ const ScanDocument: React.FC = () => {
         if (scan) URL.revokeObjectURL(scan.url);
     }, [scan]);
 
-    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode, pixelSize: PageSize, automatic = false, straighten = autoStraighten) {
+    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode, pixelSize: PageSize, straighten = autoStraighten) {
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas unavailable');
         const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -127,7 +127,7 @@ const ScanDocument: React.FC = () => {
             const result = await new Promise<ImageData>((resolve, reject) => {
                 worker.onmessage = ({ data }) => data.image ? resolve(data.image) : reject(new Error('Scan failed'));
                 worker.onerror = reject;
-                worker.postMessage({ image, corners: selection, mode: scanMode, automatic, straighten }, [image.data.buffer]);
+                worker.postMessage({ image, corners: selection, mode: scanMode, straighten }, [image.data.buffer]);
             });
             return await scanPageJpeg(result, pixelSize);
         } finally {
@@ -142,7 +142,7 @@ const ScanDocument: React.FC = () => {
         setError('');
         setScan(null);
         try {
-            const blob = await scanCanvas(page.canvas, selection, scanMode, page.pixelSize, selection === page.detected, straighten);
+            const blob = await scanCanvas(page.canvas, selection, scanMode, page.pixelSize, straighten);
             if (job.current !== current) return;
             setScan({ blob, url: URL.createObjectURL(blob) });
             setView('scan');
@@ -200,9 +200,9 @@ const ScanDocument: React.FC = () => {
             openedPdf = undefined;
             setPageNumber(1);
             setSource(next);
-            setCorners(next.detected);
+            setCorners(imageCorners);
             setView('crop');
-            await process(next, next.detected, mode);
+            await process(next, imageCorners, mode);
         } catch (error) {
             if (url) URL.revokeObjectURL(url);
             if (job.current === current) {
@@ -409,7 +409,7 @@ const ScanDocument: React.FC = () => {
                                 </div>
                                 <div className="mt-5 flex flex-wrap gap-2">
                                     <button type="button" className={secondaryButton} disabled={busy} onClick={() => changeCorners(source.detected)}>
-                                        استعادة التحديد التلقائي
+                                        اقتراح حدود الورقة
                                     </button>
                                     <button type="button" className={secondaryButton} disabled={busy} onClick={() => changeCorners(imageCorners)}>
                                         استخدام الصورة كاملة

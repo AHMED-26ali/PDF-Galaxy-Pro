@@ -328,11 +328,6 @@ function alignment(sample: ReturnType<typeof luminance>) {
     return { rows: flatScore(horizontal) / horizontal.width, columns: flatScore(vertical) / vertical.width };
 }
 
-export function layoutAlignment(image: ImageData) {
-    const measured = alignment(luminance(image));
-    return measured.rows + measured.columns;
-}
-
 function parallelRails(lines: Line[], aspect: number) {
     const strongest = [...lines].sort((a, b) => b.score - a.score);
     const first = strongest.find(line => line.position < 0.28);
@@ -359,96 +354,6 @@ function bestAxis(sample: ReturnType<typeof luminance>, vertical: boolean): Axis
         selected = { ...option, gain: (score - initialScore) / profile.width };
     }
     return selected;
-}
-
-function rail(profile: Profile, right: boolean) {
-    const { width, height, strength } = profile;
-    const first = Math.round(width * 0.16);
-    const last = Math.round(width * 0.91);
-    const from = Math.round(height * (right ? 0.82 : 0.012));
-    const to = Math.round(height * (right ? 0.992 : 0.18));
-    let best: { position: number; score: number } | undefined;
-    for (let y = Math.max(3, from); y <= Math.min(height - 4, to); y++) {
-        const section = [0, 0, 0];
-        let score = 0;
-        for (let x = first; x < last; x++) {
-            const index = y * width + x;
-            const ink = Math.max(strength[index], strength[index - width], strength[index + width],
-                strength[index - 2 * width] * 0.78, strength[index + 2 * width] * 0.78);
-            if (ink < 18) continue;
-            score += ink;
-            section[Math.min(2, Math.floor(3 * (x - first) / (last - first)))]++;
-        }
-        if (Math.min(...section) < (last - first) * 0.19) continue;
-        if (!best || score > best.score) best = { position: y, score };
-    }
-    return best?.position;
-}
-
-// Long marks at a photo edge are excluded only when no cluster of printed strokes is present in the margin.
-function sparseMargin(sample: ReturnType<typeof luminance>, left: number, top: number, right: number, bottom: number) {
-    let textRows = 0;
-    for (let y = top; y < bottom; y++) {
-        let groups = 0;
-        let active = false;
-        let mass = 0;
-        for (let x = left; x < right; x++) {
-            const dark = sample.levels[y * sample.width + x] < 166;
-            if (dark) {
-                mass++;
-                if (!active) groups++;
-            }
-            active = dark;
-        }
-        if (groups >= 3 && mass >= 5) textRows++;
-    }
-    return textRows < Math.max(2, (bottom - top) * 0.08);
-}
-
-function whiteArea(image: ImageData, sample: ReturnType<typeof luminance>, left: number, top: number, right: number, bottom: number) {
-    const x1 = Math.floor(left * image.width / sample.width);
-    const x2 = Math.floor(right * image.width / sample.width);
-    const y1 = Math.floor(top * image.height / sample.height);
-    const y2 = Math.floor(bottom * image.height / sample.height);
-    for (let y = y1; y < y2; y++) {
-        image.data.fill(255, (y * image.width + x1) * 4, (y * image.width + x2) * 4);
-    }
-}
-
-function cleanFormMargins(image: ImageData) {
-    const sample = luminance(image);
-    if (sample.width < 175 || sample.height < 175) return;
-    const side = evidence(sample, true);
-    const left = rail(side, false);
-    const right = rail(side, true);
-    if (left === undefined || right === undefined || right - left < sample.width * 0.66) return;
-
-    const guard = Math.round(sample.width * 0.021);
-    const leftCut = Math.max(0, left - guard);
-    const rightCut = Math.min(sample.width, right + guard);
-    if (sparseMargin(sample, 0, 0, leftCut, sample.height)) {
-        whiteArea(image, sample, 0, 0, leftCut, sample.height);
-    }
-    if (sparseMargin(sample, rightCut, 0, sample.width, sample.height)) {
-        whiteArea(image, sample, rightCut, 0, sample.width, sample.height);
-    }
-
-    const horizontal = evidence(sample, false);
-    const first = left + Math.round(sample.width * 0.055);
-    const last = left + Math.round(sample.width * 0.305);
-    for (let y = Math.round(sample.height * 0.037); y < Math.round(sample.height * 0.135); y++) {
-        let covered = 0;
-        for (let x = first; x < last; x++) {
-            const index = y * sample.width + x;
-            if (Math.max(horizontal.strength[index], horizontal.strength[index - sample.width],
-                horizontal.strength[index + sample.width]) > 22) covered++;
-        }
-        if (covered < (last - first) * 0.69) continue;
-        const cut = y - Math.max(2, Math.round(sample.height * 0.007));
-        const edge = left + Math.round(sample.width * 0.245);
-        if (sparseMargin(sample, 0, 0, edge, cut)) whiteArea(image, sample, 0, 0, edge, cut);
-        break;
-    }
 }
 
 function applyAxes(image: ImageData, horizontal: Axis, vertical: Axis) {
@@ -482,7 +387,7 @@ function applyAxes(image: ImageData, horizontal: Axis, vertical: Axis) {
     return result;
 }
 
-export function straightenLayout(image: ImageData, trimPhotoMargins = false) {
+export function straightenLayout(image: ImageData) {
     const sample = luminance(image);
     const vertical = bestAxis(sample, true);
     const horizontal = bestAxis(sample, false);
@@ -507,9 +412,7 @@ export function straightenLayout(image: ImageData, trimPhotoMargins = false) {
                 && after.rows + after.columns >= (before.rows + before.columns) * 1.025 + 3
             : movedRows ? rowsImprove : columnsImprove;
         if (!improves) continue;
-        if (trimPhotoMargins) cleanFormMargins(result);
         return result;
     }
-    if (trimPhotoMargins) cleanFormMargins(image);
     return image;
 }
