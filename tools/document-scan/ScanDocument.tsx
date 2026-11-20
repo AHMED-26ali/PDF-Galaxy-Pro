@@ -1,10 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUpTrayIcon, DocumentTextIcon, PhotoIcon } from '../../components/icons';
 import { canvasToBlob, clearCanvas, downloadFile, openPdf, pdfError, renderPdfPage, type PDFDocumentProxy } from '../pdfRuntime';
-import { scanPageJpeg } from './scanPage';
+import { scanPageJpeg, type PageSize } from './scanPage';
 import { detectCorners, imageCorners, validCorners, type Corners, type Point, type ScanMode } from './scanImage';
 
-type Source = { url: string; fileName: string; canvas: HTMLCanvasElement; detected: Corners };
+type Source = {
+    url: string;
+    fileName: string;
+    canvas: HTMLCanvasElement;
+    detected: Corners;
+    pixelSize: PageSize;
+    pdfSize: PageSize;
+};
 type Scan = { url: string; blob: Blob };
 
 const galleryTypes = 'image/*,.heic,.heif';
@@ -56,17 +63,20 @@ function imageCanvas(image: CanvasImageSource, width: number, height: number, ma
 async function pdfCanvas(pdf: PDFDocumentProxy, pageNumber: number) {
     const page = await pdf.getPage(pageNumber);
     try {
-        return await renderPdfPage(page, 4.2, 3508);
+        const { width, height } = page.getViewport({ scale: 1 });
+        const canvas = await renderPdfPage(page, 4.2, 3508);
+        return { canvas, pdfSize: { width, height } };
     } finally {
         page.cleanup();
     }
 }
 
 async function pdfPageSource(pdf: PDFDocumentProxy, pageNumber: number, fileName: string): Promise<Source> {
-    const canvas = await pdfCanvas(pdf, pageNumber);
+    const { canvas, pdfSize } = await pdfCanvas(pdf, pageNumber);
     try {
         const blob = await canvasToBlob(canvas, 'image/jpeg', 0.9);
-        return { url: URL.createObjectURL(blob), fileName, canvas, detected: imageCorners };
+        return { url: URL.createObjectURL(blob), fileName, canvas, detected: imageCorners,
+            pixelSize: { width: canvas.width, height: canvas.height }, pdfSize };
     } catch (error) {
         clearCanvas(canvas);
         throw error;
@@ -106,7 +116,7 @@ const ScanDocument: React.FC = () => {
         if (scan) URL.revokeObjectURL(scan.url);
     }, [scan]);
 
-    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode) {
+    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode, pixelSize: PageSize) {
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas unavailable');
         const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -118,20 +128,20 @@ const ScanDocument: React.FC = () => {
                 worker.onerror = reject;
                 worker.postMessage({ image, corners: selection, mode: scanMode }, [image.data.buffer]);
             });
-            return await scanPageJpeg(result);
+            return await scanPageJpeg(result, pixelSize);
         } finally {
             worker.terminate();
             if (workerRef.current === worker) workerRef.current = null;
         }
     }
 
-    async function process(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode) {
+    async function process(page: Source, selection: Corners, scanMode: ScanMode) {
         const current = ++job.current;
         setStatus('processing');
         setError('');
         setScan(null);
         try {
-            const blob = await scanCanvas(canvas, selection, scanMode);
+            const blob = await scanCanvas(page.canvas, selection, scanMode, page.pixelSize);
             if (job.current !== current) return;
             setScan({ blob, url: URL.createObjectURL(blob) });
             setView('scan');
@@ -174,7 +184,10 @@ const ScanDocument: React.FC = () => {
                 const { canvas } = imageCanvas(image, image.naturalWidth, image.naturalHeight, 3600);
                 const preview = imageCanvas(canvas, canvas.width, canvas.height, 384);
                 const detected = detectCorners(preview.ctx.getImageData(0, 0, preview.canvas.width, preview.canvas.height));
-                next = { url, fileName, canvas, detected };
+                const pixelSize = { width: image.naturalWidth, height: image.naturalHeight };
+                // A photo has pixel dimensions; map CSS pixels to PDF points at 96 px/in.
+                const pdfSize = { width: pixelSize.width * 72 / 96, height: pixelSize.height * 72 / 96 };
+                next = { url, fileName, canvas, detected, pixelSize, pdfSize };
             }
             if (job.current !== current) {
                 URL.revokeObjectURL(next.url);
@@ -188,7 +201,7 @@ const ScanDocument: React.FC = () => {
             setSource(next);
             setCorners(next.detected);
             setView('crop');
-            await process(next.canvas, next.detected, mode);
+            await process(next, next.detected, mode);
         } catch (error) {
             if (url) URL.revokeObjectURL(url);
             if (job.current === current) {
@@ -225,7 +238,7 @@ const ScanDocument: React.FC = () => {
             setSource(next);
             setCorners(selection);
             setView('crop');
-            await process(next.canvas, selection, mode);
+            await process(next, selection, mode);
         } catch {
             if (job.current === current) {
                 setError('تعذّر فتح الصفحة. جرّب مرة أخرى.');
@@ -258,24 +271,27 @@ const ScanDocument: React.FC = () => {
         setStatus('pdf');
         setError('');
         try {
-            const { PDFDocument, PageSizes } = await import('pdf-lib');
+            const { PDFDocument } = await import('pdf-lib');
             const output = await PDFDocument.create();
             for (let number = 1; number <= pageCount; number++) {
                 if (job.current !== current) return;
                 setExportPage(number);
                 let blob = scan.blob;
+                let pageSize = source.pdfSize;
                 if (pdfDocument && number !== pageNumber) {
-                    const canvas = await pdfCanvas(pdfDocument, number);
+                    const { canvas, pdfSize } = await pdfCanvas(pdfDocument, number);
+                    pageSize = pdfSize;
                     try {
                         if (job.current !== current) return;
-                        blob = await scanCanvas(canvas, pageSelections.current.get(number) ?? imageCorners, mode);
+                        blob = await scanCanvas(canvas, pageSelections.current.get(number) ?? imageCorners, mode,
+                            { width: canvas.width, height: canvas.height });
                     } finally {
                         clearCanvas(canvas);
                     }
                 }
                 if (job.current !== current) return;
                 const image = await output.embedJpg(await blob.arrayBuffer());
-                const [width, height] = image.width > image.height ? [PageSizes.A4[1], PageSizes.A4[0]] : PageSizes.A4;
+                const { width, height } = pageSize;
                 const page = output.addPage([width, height]);
                 const size = image.scaleToFit(width, height);
                 page.drawImage(image, { ...size, x: (width - size.width) / 2, y: (height - size.height) / 2 });
@@ -412,7 +428,7 @@ const ScanDocument: React.FC = () => {
                                         {pdfDocument && pdfDocument.numPages > 1 ? 'تنزيل الصفحة JPG' : 'تنزيل كصورة JPG'}
                                     </a>
                                     <button type="button" className={primaryButton} disabled={busy} onClick={downloadPdf}>
-                                        {pdfDocument && pdfDocument.numPages > 1 ? 'تنزيل كل الصفحات PDF بحجم A4' : 'تنزيل كملف PDF بحجم A4'}
+                                        {pdfDocument && pdfDocument.numPages > 1 ? 'تنزيل كل الصفحات PDF' : 'تنزيل كملف PDF'}
                                     </button>
                                 </div>
                             </section>
@@ -425,7 +441,7 @@ const ScanDocument: React.FC = () => {
                                 onChange={event => {
                                     const nextMode = event.target.value as ScanMode;
                                     setMode(nextMode);
-                                    if (view === 'scan') void process(source.canvas, corners, nextMode);
+                                    if (view === 'scan') void process(source, corners, nextMode);
                                     else setScan(null);
                                 }}>
                                 <option value="grayscale">أبيض وأسود</option>
@@ -434,7 +450,7 @@ const ScanDocument: React.FC = () => {
                         </label>
                         {(!scan || view === 'crop') && (
                             <button type="button" className={primaryButton} disabled={busy}
-                                onClick={() => process(source.canvas, corners, mode)}>تحسين الصورة</button>
+                                onClick={() => process(source, corners, mode)}>تحسين الصورة</button>
                         )}
                     </div>
                 </>

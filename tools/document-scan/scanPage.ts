@@ -1,5 +1,7 @@
 import { canvasToBlob, clearCanvas } from '../pdfRuntime';
 
+export type PageSize = { width: number; height: number };
+
 function inkEdges(projection: Uint32Array, support: number) {
     let start = 0;
     let end = projection.length - 1;
@@ -39,7 +41,7 @@ function contentBounds({ width, height, data }: ImageData) {
     };
 }
 
-export async function scanPageJpeg(image: ImageData) {
+export async function scanPageJpeg(image: ImageData, size: PageSize) {
     const source = document.createElement('canvas');
     const page = document.createElement('canvas');
     try {
@@ -50,17 +52,14 @@ export async function scanPageJpeg(image: ImageData) {
         if (!pixels) throw new Error('Canvas unavailable');
         pixels.putImageData(image, -bounds.x, -bounds.y, bounds.x, bounds.y, bounds.width, bounds.height);
 
-        const longSide = Math.max(900, image.width, image.height);
-        const shortSide = Math.round(longSide / Math.SQRT2);
-        const portrait = bounds.width <= bounds.height;
-        page.width = portrait ? shortSide : longSide;
-        page.height = portrait ? longSide : shortSide;
+        page.width = size.width;
+        page.height = size.height;
         const ctx = page.getContext('2d');
         if (!ctx) throw new Error('Canvas unavailable');
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, page.width, page.height);
         ctx.imageSmoothingQuality = 'high';
-        const margin = shortSide * 0.042;
+        const margin = Math.min(page.width, page.height) * 0.042;
         const scale = Math.min((page.width - margin * 2) / bounds.width, (page.height - margin * 2) / bounds.height);
         const width = bounds.width * scale;
         const height = bounds.height * scale;
