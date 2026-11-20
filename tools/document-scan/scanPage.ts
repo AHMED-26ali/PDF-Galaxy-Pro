@@ -41,6 +41,31 @@ function contentBounds({ width, height, data }: ImageData) {
     };
 }
 
+function sharpenText(context: CanvasRenderingContext2D, width: number, height: number) {
+    if (width < 8 || height < 8) return;
+    const image = context.getImageData(0, 0, width, height);
+    const ink = new Uint8Array(width * height);
+    for (let index = 0; index < ink.length; index++) {
+        const pixel = index * 4;
+        ink[index] = image.data[pixel] * 0.299 + image.data[pixel + 1] * 0.587 + image.data[pixel + 2] * 0.114;
+    }
+    const radius = Math.max(1, Math.min(3, Math.round(Math.min(width, height) / 950)));
+    const stride = radius * width;
+    for (let y = radius; y < height - radius; y++) {
+        for (let x = radius; x < width - radius; x++) {
+            const index = y * width + x;
+            const level = ink[index];
+            const soft = (ink[index - radius] + ink[index + radius] + ink[index - stride] + ink[index + stride]) / 4;
+            const detail = level - soft;
+            if (Math.abs(detail) < 4) continue;
+            const correction = Math.max(-48, Math.min(22, detail * (detail < 0 ? 0.9 : 0.48)));
+            const pixel = index * 4;
+            for (let channel = 0; channel < 3; channel++) image.data[pixel + channel] += correction;
+        }
+    }
+    context.putImageData(image, 0, 0);
+}
+
 export async function scanPageJpeg(image: ImageData, size: PageSize) {
     const source = document.createElement('canvas');
     const page = document.createElement('canvas');
@@ -54,7 +79,7 @@ export async function scanPageJpeg(image: ImageData, size: PageSize) {
 
         page.width = size.width;
         page.height = size.height;
-        const ctx = page.getContext('2d');
+        const ctx = page.getContext('2d', { willReadFrequently: true });
         if (!ctx) throw new Error('Canvas unavailable');
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, page.width, page.height);
@@ -64,7 +89,8 @@ export async function scanPageJpeg(image: ImageData, size: PageSize) {
         const width = bounds.width * scale;
         const height = bounds.height * scale;
         ctx.drawImage(source, (page.width - width) / 2, (page.height - height) / 2, width, height);
-        return await canvasToBlob(page, 'image/jpeg', 0.95);
+        sharpenText(ctx, page.width, page.height);
+        return await canvasToBlob(page, 'image/jpeg', 0.97);
     } finally {
         clearCanvas(source);
         clearCanvas(page);

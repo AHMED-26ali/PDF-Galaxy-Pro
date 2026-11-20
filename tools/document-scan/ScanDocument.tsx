@@ -92,6 +92,7 @@ const ScanDocument: React.FC = () => {
     const [scan, setScan] = useState<Scan | null>(null);
     const [corners, setCorners] = useState<Corners>(imageCorners);
     const [mode, setMode] = useState<ScanMode>('grayscale');
+    const [autoStraighten, setAutoStraighten] = useState(true);
     const [view, setView] = useState<'crop' | 'scan'>('crop');
     const [status, setStatus] = useState<'idle' | 'loading' | 'processing' | 'pdf'>('idle');
     const [error, setError] = useState('');
@@ -116,7 +117,7 @@ const ScanDocument: React.FC = () => {
         if (scan) URL.revokeObjectURL(scan.url);
     }, [scan]);
 
-    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode, pixelSize: PageSize) {
+    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode, pixelSize: PageSize, automatic = false, straighten = autoStraighten) {
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas unavailable');
         const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -126,7 +127,7 @@ const ScanDocument: React.FC = () => {
             const result = await new Promise<ImageData>((resolve, reject) => {
                 worker.onmessage = ({ data }) => data.image ? resolve(data.image) : reject(new Error('Scan failed'));
                 worker.onerror = reject;
-                worker.postMessage({ image, corners: selection, mode: scanMode }, [image.data.buffer]);
+                worker.postMessage({ image, corners: selection, mode: scanMode, automatic, straighten }, [image.data.buffer]);
             });
             return await scanPageJpeg(result, pixelSize);
         } finally {
@@ -135,13 +136,13 @@ const ScanDocument: React.FC = () => {
         }
     }
 
-    async function process(page: Source, selection: Corners, scanMode: ScanMode) {
+    async function process(page: Source, selection: Corners, scanMode: ScanMode, straighten = autoStraighten) {
         const current = ++job.current;
         setStatus('processing');
         setError('');
         setScan(null);
         try {
-            const blob = await scanCanvas(page.canvas, selection, scanMode, page.pixelSize);
+            const blob = await scanCanvas(page.canvas, selection, scanMode, page.pixelSize, selection === page.detected, straighten);
             if (job.current !== current) return;
             setScan({ blob, url: URL.createObjectURL(blob) });
             setView('scan');
@@ -447,6 +448,16 @@ const ScanDocument: React.FC = () => {
                                 <option value="grayscale">أبيض وأسود</option>
                                 <option value="color">ألوان محسّنة</option>
                             </select>
+                        </label>
+                        <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+                            <input type="checkbox" className="h-4 w-4 accent-blue-600" checked={autoStraighten} disabled={busy}
+                                onChange={event => {
+                                    const enabled = event.target.checked;
+                                    setAutoStraighten(enabled);
+                                    if (view === 'scan') void process(source, corners, mode, enabled);
+                                    else setScan(null);
+                                }} />
+                            تصحيح الميل تلقائيًا
                         </label>
                         {(!scan || view === 'crop') && (
                             <button type="button" className={primaryButton} disabled={busy}

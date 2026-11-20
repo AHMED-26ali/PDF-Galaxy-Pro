@@ -1,5 +1,7 @@
 type Line = { position: number; slope: number; bend: number; score: number };
-type Axis = { shift: (across: number, along: number) => number; start: number; end: number };
+type Axis = { shift: (across: number, along: number) => number; start: number; end: number; gain?: number };
+const identity: Axis = { shift: (_, along) => along, start: 0, end: 1 };
+const doesShift = (axis: Axis) => axis.start !== 0 || axis.end !== 1;
 
 const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
@@ -26,10 +28,9 @@ function luminance(image: ImageData) {
     return { width, height, levels };
 }
 
-function findLines(image: ReturnType<typeof luminance>, vertical: boolean) {
+function evidence(image: ReturnType<typeof luminance>, vertical: boolean) {
     const width = vertical ? image.height : image.width;
     const height = vertical ? image.width : image.height;
-    if (width < 90 || height < 90) return [];
     const read = (x: number, y: number) => image.levels[vertical ? x * image.width + y : y * image.width + x];
     const strength = new Uint8Array(width * height);
     for (let y = 4; y < height - 4; y++) {
@@ -39,6 +40,11 @@ function findLines(image: ReturnType<typeof luminance>, vertical: boolean) {
         }
     }
 
+    return { width, height, strength };
+}
+
+function findLines({ width, height, strength }: ReturnType<typeof evidence>, vertical: boolean) {
+    if (width < 90 || height < 90) return [];
     const starts = Math.round(width * 0.08);
     const stops = width - starts;
     const samples = Array.from({ length: Math.floor((stops - starts) / 3) }, (_, index) => starts + index * 3);
@@ -66,8 +72,8 @@ function findLines(image: ReturnType<typeof luminance>, vertical: boolean) {
                     if (index < samples.length / 3) left++;
                     if (index >= samples.length * 2 / 3) right++;
                 }
-                if (supported < samples.length * (vertical ? 0.40 : 0.49)
-                    || Math.min(left, right) < samples.length * (vertical ? 0.075 : 0.095)) continue;
+                if (supported < samples.length * (vertical ? 0.35 : 0.49)
+                    || Math.min(left, right) < samples.length * (vertical ? 0.055 : 0.095)) continue;
                 const score = total - samples.length * (Math.abs(bend) * 7 + Math.abs(slope) * 2);
                 const band = Math.floor(y / height * best.length);
                 if (score > (best[band]?.score ?? 0)) {
@@ -110,7 +116,6 @@ function fit(lines: Line[], getValue: (line: Line) => number, tolerance: number)
 }
 
 function axis(lines: Line[], aspect: number, vertical: boolean): Axis {
-    const identity: Axis = { shift: (_, along) => along, start: 0, end: 1 };
     if (lines.length < (vertical ? 3 : 2)) return identity;
     const totalScore = lines.reduce((sum, line) => sum + line.score, 0);
     const straightScore = lines.reduce((sum, line) =>
@@ -136,13 +141,277 @@ function axis(lines: Line[], aspect: number, vertical: boolean): Axis {
     return { shift, start, end };
 }
 
-export function straightenLayout(image: ImageData) {
-    const { width, height, data } = image;
-    const sample = luminance(image);
-    const vertical = axis(findLines(sample, true), height / width, true);
-    const horizontal = axis(findLines(sample, false), width / height, false);
-    if (horizontal.start === 0 && horizontal.end === 1 && vertical.start === 0 && vertical.end === 1) return image;
+type Profile = ReturnType<typeof evidence>;
+type Trace = { anchor: number; offsets: number[]; confidence: number };
 
+const nodeCount = 11;
+
+function traceRule(profile: Profile, line: Line): Trace | null {
+    const { width, height, strength } = profile;
+    const offsets: number[] = [];
+    const ratings: number[] = [];
+    const radius = Math.max(3, Math.round(width / (nodeCount * 2.25)));
+    const course = (x: number) => {
+        const dx = x - (width - 1) / 2;
+        return line.position * height + dx * (line.slope + line.bend * dx / width);
+    };
+
+    for (let node = 0; node < nodeCount; node++) {
+        const center = Math.round((width - 1) * (0.055 + 0.89 * node / (nodeCount - 1)));
+        let best = { offset: 0, rating: 0 };
+        for (let offset = -5; offset <= 5; offset++) {
+            let sum = 0;
+            let hit = 0;
+            let count = 0;
+            for (let x = Math.max(0, center - radius); x <= Math.min(width - 1, center + radius); x++) {
+                const y = Math.round(course(x)) + offset;
+                if (y < 1 || y >= height - 1) continue;
+                const index = y * width + x;
+                const value = Math.max(strength[index], strength[index - width] * 0.68, strength[index + width] * 0.68);
+                count++;
+                sum += value;
+                if (value >= 21) hit++;
+            }
+            if (!count || hit < count * 0.45) continue;
+            const rating = sum / count - Math.abs(offset) * 1.2;
+            if (rating > best.rating) best = { offset, rating };
+        }
+        offsets.push(best.offset);
+        ratings.push(best.rating);
+    }
+
+    const anchors = ratings.flatMap((rating, index) => rating >= 18 ? [index] : []);
+    if (anchors.length < 7 || anchors[0] > 2 || anchors[anchors.length - 1] < 8) return null;
+    const positions = offsets.map((offset, node) => {
+        const lo = [...anchors].reverse().find(index => index <= node);
+        const hi = anchors.find(index => index >= node);
+        const left = lo ?? anchors[0];
+        const right = hi ?? anchors[anchors.length - 1];
+        const residual = left === right ? offsets[left] :
+            offsets[left] + (offsets[right] - offsets[left]) * (node - left) / (right - left);
+        const px = (width - 1) * (0.055 + 0.89 * node / (nodeCount - 1));
+        return (course(px) + (ratings[node] >= 18 ? offset : residual)) / (height - 1);
+    });
+    const smoothed = positions.map((value, index) => {
+        if (index === 0 || index === nodeCount - 1) return value;
+        return (positions[index - 1] + value * 4 + positions[index + 1]) / 6;
+    });
+    const anchor = smoothed[(nodeCount - 1) / 2];
+    return { anchor, offsets: smoothed.map(position => position - anchor), confidence: ratings.reduce((a, b) => a + b, 0) };
+}
+
+function trackedAxis(profile: Profile, lines: Line[], baseline: Axis): Axis | undefined {
+    const ranked = lines.map(line => traceRule(profile, line)).filter((trace): trace is Trace => !!trace)
+        .sort((a, b) => b.confidence - a.confidence);
+    const traces: Trace[] = [];
+    const refine = baseline.start !== 0 || baseline.end !== 1;
+    for (const trace of ranked) {
+        const modelDeviation = trace.offsets.map((offset, index) => {
+            const across = 0.055 + 0.89 * index / (nodeCount - 1);
+            return Math.abs(trace.anchor + offset - baseline.shift(across, trace.anchor));
+        });
+        if (refine && Math.max(...modelDeviation) > 0.024) continue;
+        if (traces.some(other => {
+            const distance = other.anchor - trace.anchor;
+            return Math.abs(distance) < 0.032 || other.offsets.some((offset, i) =>
+                Math.abs(offset - trace.offsets[i]) > Math.abs(distance) * 0.22);
+        })) continue;
+        traces.push(trace);
+    }
+    traces.sort((a, b) => a.anchor - b.anchor);
+    if (traces.length < 2) return undefined;
+    const offsetAt = (trace: Trace, across: number) => {
+        const node = (across - 0.055) / 0.89 * (nodeCount - 1);
+        const index = Math.min(nodeCount - 2, Math.max(0, Math.floor(node)));
+        return trace.offsets[index] + (trace.offsets[index + 1] - trace.offsets[index]) * (node - index);
+    };
+    const shift = (across: number, along: number) => {
+        const next = traces.findIndex(trace => trace.anchor >= along);
+        if (next <= 0) return along + offsetAt(traces[next === 0 ? 0 : traces.length - 1], across);
+        const from = traces[next - 1];
+        const to = traces[next];
+        const amount = (along - from.anchor) / (to.anchor - from.anchor);
+        return along + offsetAt(from, across) * (1 - amount) + offsetAt(to, across) * amount;
+    };
+    return paddedAxis(shift);
+}
+
+function paddedAxis(shift: Axis['shift']): Axis {
+    let start = 0;
+    let end = 1;
+    for (let index = 0; index <= 16; index++) {
+        const across = index / 16;
+        start = Math.min(start, -shift(across, 0));
+        end = Math.max(end, 2 - shift(across, 1));
+    }
+    if (start > -0.004 && end < 1.004) return { shift: (_, along) => along, start: 0, end: 1 };
+    return { shift, start, end };
+}
+
+function flatScore(profile: Profile, candidate?: Axis) {
+    const { width, height, strength } = profile;
+    const scores: { score: number; row: number }[] = [];
+    const start = Math.ceil(width * 0.11);
+    const end = Math.floor(width * 0.89);
+    const sampleCount = Math.ceil((end - start) / 2);
+    for (let y = 5; y < height - 5; y++) {
+        let support = 0;
+        let contrast = 0;
+        let occupied = 0;
+        for (let x = start; x < end; x += 2) {
+            const at = candidate ? Math.round(candidate.shift(x / (width - 1), y / (height - 1)) * (height - 1)) : y;
+            if (at < 1 || at >= height - 1) continue;
+            const pixel = at * width + x;
+            const value = Math.max(strength[pixel], 0.6 * strength[pixel - width], 0.6 * strength[pixel + width]);
+            if (value < 20) continue;
+            support++;
+            occupied |= 1 << Math.min(5, Math.floor(6 * (x - start) / (end - start)));
+            contrast += value;
+        }
+        if (support >= sampleCount * 0.46 && (occupied & 3) && (occupied & 48)) {
+            scores.push({ score: contrast * (support / sampleCount), row: y });
+        }
+    }
+    const best: typeof scores = [];
+    for (const row of scores.sort((a, b) => b.score - a.score)) {
+        if (best.some(entry => Math.abs(entry.row - row.row) <= 5)) continue;
+        best.push(row);
+        if (best.length === 10) break;
+    }
+    return best.reduce((sum, row) => sum + row.score, 0);
+}
+
+function alignment(sample: ReturnType<typeof luminance>) {
+    const horizontal = evidence(sample, false);
+    const vertical = evidence(sample, true);
+    return { rows: flatScore(horizontal) / horizontal.width, columns: flatScore(vertical) / vertical.width };
+}
+
+export function layoutAlignment(image: ImageData) {
+    const measured = alignment(luminance(image));
+    return measured.rows + measured.columns;
+}
+
+function parallelRails(lines: Line[], aspect: number) {
+    const strongest = [...lines].sort((a, b) => b.score - a.score);
+    const first = strongest.find(line => line.position < 0.28);
+    const last = strongest.find(line => line.position > 0.72);
+    if (!first || !last || Math.abs(first.slope - last.slope) > 0.033 || Math.max(Math.abs(first.bend), Math.abs(last.bend)) > 0.05) return;
+    const slope = (first.slope + last.slope) / 2;
+    if (Math.abs(slope) < 0.016) return;
+    return paddedAxis((across, along) => along + (across - 0.5) * aspect * slope);
+}
+
+function bestAxis(sample: ReturnType<typeof luminance>, vertical: boolean): Axis {
+    const profile = evidence(sample, vertical);
+    const lines = findLines(profile, vertical);
+    let selected = identity;
+    const initialScore = flatScore(profile);
+    let bestScore = initialScore;
+    const aspect = profile.width / profile.height;
+    const model = axis(lines, aspect, vertical);
+    for (const option of [model, trackedAxis(profile, lines, model), parallelRails(lines, aspect)]) {
+        if (!option || !doesShift(option)) continue;
+        const score = flatScore(profile, option);
+        if (score < bestScore * 1.045 + profile.width * 1.3) continue;
+        bestScore = score;
+        selected = { ...option, gain: (score - initialScore) / profile.width };
+    }
+    return selected;
+}
+
+function rail(profile: Profile, right: boolean) {
+    const { width, height, strength } = profile;
+    const first = Math.round(width * 0.16);
+    const last = Math.round(width * 0.91);
+    const from = Math.round(height * (right ? 0.82 : 0.012));
+    const to = Math.round(height * (right ? 0.992 : 0.18));
+    let best: { position: number; score: number } | undefined;
+    for (let y = Math.max(3, from); y <= Math.min(height - 4, to); y++) {
+        const section = [0, 0, 0];
+        let score = 0;
+        for (let x = first; x < last; x++) {
+            const index = y * width + x;
+            const ink = Math.max(strength[index], strength[index - width], strength[index + width],
+                strength[index - 2 * width] * 0.78, strength[index + 2 * width] * 0.78);
+            if (ink < 18) continue;
+            score += ink;
+            section[Math.min(2, Math.floor(3 * (x - first) / (last - first)))]++;
+        }
+        if (Math.min(...section) < (last - first) * 0.19) continue;
+        if (!best || score > best.score) best = { position: y, score };
+    }
+    return best?.position;
+}
+
+// Long marks at a photo edge are excluded only when no cluster of printed strokes is present in the margin.
+function sparseMargin(sample: ReturnType<typeof luminance>, left: number, top: number, right: number, bottom: number) {
+    let textRows = 0;
+    for (let y = top; y < bottom; y++) {
+        let groups = 0;
+        let active = false;
+        let mass = 0;
+        for (let x = left; x < right; x++) {
+            const dark = sample.levels[y * sample.width + x] < 166;
+            if (dark) {
+                mass++;
+                if (!active) groups++;
+            }
+            active = dark;
+        }
+        if (groups >= 3 && mass >= 5) textRows++;
+    }
+    return textRows < Math.max(2, (bottom - top) * 0.08);
+}
+
+function whiteArea(image: ImageData, sample: ReturnType<typeof luminance>, left: number, top: number, right: number, bottom: number) {
+    const x1 = Math.floor(left * image.width / sample.width);
+    const x2 = Math.floor(right * image.width / sample.width);
+    const y1 = Math.floor(top * image.height / sample.height);
+    const y2 = Math.floor(bottom * image.height / sample.height);
+    for (let y = y1; y < y2; y++) {
+        image.data.fill(255, (y * image.width + x1) * 4, (y * image.width + x2) * 4);
+    }
+}
+
+function cleanFormMargins(image: ImageData) {
+    const sample = luminance(image);
+    if (sample.width < 175 || sample.height < 175) return;
+    const side = evidence(sample, true);
+    const left = rail(side, false);
+    const right = rail(side, true);
+    if (left === undefined || right === undefined || right - left < sample.width * 0.66) return;
+
+    const guard = Math.round(sample.width * 0.021);
+    const leftCut = Math.max(0, left - guard);
+    const rightCut = Math.min(sample.width, right + guard);
+    if (sparseMargin(sample, 0, 0, leftCut, sample.height)) {
+        whiteArea(image, sample, 0, 0, leftCut, sample.height);
+    }
+    if (sparseMargin(sample, rightCut, 0, sample.width, sample.height)) {
+        whiteArea(image, sample, rightCut, 0, sample.width, sample.height);
+    }
+
+    const horizontal = evidence(sample, false);
+    const first = left + Math.round(sample.width * 0.055);
+    const last = left + Math.round(sample.width * 0.305);
+    for (let y = Math.round(sample.height * 0.037); y < Math.round(sample.height * 0.135); y++) {
+        let covered = 0;
+        for (let x = first; x < last; x++) {
+            const index = y * sample.width + x;
+            if (Math.max(horizontal.strength[index], horizontal.strength[index - sample.width],
+                horizontal.strength[index + sample.width]) > 22) covered++;
+        }
+        if (covered < (last - first) * 0.69) continue;
+        const cut = y - Math.max(2, Math.round(sample.height * 0.007));
+        const edge = left + Math.round(sample.width * 0.245);
+        if (sparseMargin(sample, 0, 0, edge, cut)) whiteArea(image, sample, 0, 0, edge, cut);
+        break;
+    }
+}
+
+function applyAxes(image: ImageData, horizontal: Axis, vertical: Axis) {
+    const { width, height, data } = image;
     const result = new ImageData(width, height);
     result.data.fill(255);
     const xs = Float32Array.from({ length: width }, (_, x) => x / (width - 1));
@@ -170,4 +439,36 @@ export function straightenLayout(image: ImageData) {
         }
     }
     return result;
+}
+
+export function straightenLayout(image: ImageData, trimPhotoMargins = false) {
+    const sample = luminance(image);
+    const vertical = bestAxis(sample, true);
+    const horizontal = bestAxis(sample, false);
+    const before = alignment(sample);
+    const candidates: [Axis, Axis][] = [];
+    if (doesShift(horizontal) && doesShift(vertical)) candidates.push([horizontal, vertical]);
+    const horizontalOnly: [Axis, Axis] = [horizontal, identity];
+    const verticalOnly: [Axis, Axis] = [identity, vertical];
+    const singles = (horizontal.gain ?? 0) > (vertical.gain ?? 0) ? [horizontalOnly, verticalOnly] : [verticalOnly, horizontalOnly];
+    candidates.push(...singles.filter(([rows, columns]) => doesShift(rows) || doesShift(columns)));
+
+    for (const [rows, columns] of candidates) {
+        const result = applyAxes(image, rows, columns);
+        const after = alignment(luminance(result));
+        const movedRows = doesShift(rows);
+        const movedColumns = doesShift(columns);
+        const rowsImprove = after.rows >= before.rows * 1.055 + 4;
+        const columnsImprove = after.columns >= before.columns * 1.055 + 4;
+        const improves = movedRows && movedColumns
+            ? (rowsImprove || columnsImprove) && after.rows + 4 >= before.rows * 0.89
+                && after.columns + 4 >= before.columns * 0.89
+                && after.rows + after.columns >= (before.rows + before.columns) * 1.025 + 3
+            : movedRows ? rowsImprove : columnsImprove;
+        if (!improves) continue;
+        if (trimPhotoMargins) cleanFormMargins(result);
+        return result;
+    }
+    if (trimPhotoMargins) cleanFormMargins(image);
+    return image;
 }

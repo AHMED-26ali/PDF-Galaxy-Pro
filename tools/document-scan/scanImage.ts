@@ -1,4 +1,4 @@
-import { straightenLayout } from './deskew';
+import { layoutAlignment, straightenLayout } from './deskew';
 
 export type Point = { x: number; y: number };
 export type Corners = [Point, Point, Point, Point];
@@ -260,9 +260,45 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
     }
 }
 
-export function renderScan(input: ImageData, corners: Corners, mode: ScanMode) {
+function fullFrame(corners: Corners) {
+    return corners.every((point, index) => point.x === imageCorners[index].x && point.y === imageCorners[index].y);
+}
+
+function conservativeCrop(image: ImageData, corners: Corners): Corners {
+    if (fullFrame(corners)) return imageCorners;
+    const [a, b, c, d] = corners;
+    const left = Math.max(0, Math.min(a.x, d.x) - 0.004);
+    const right = Math.min(1, Math.max(b.x, c.x) + 0.004);
+    const top = Math.max(0, Math.min(a.y, b.y) - 0.011);
+    const bottom = Math.min(1, Math.max(c.y, d.y) + 0.011);
+    const box: Corners = [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }];
+    const variation = Math.max(Math.abs(a.x - d.x), Math.abs(b.x - c.x), Math.abs(a.y - b.y), Math.abs(d.y - c.y));
+    if (variation < 0.022) return box;
+
+    const scale = Math.min(1, 356 / Math.max(image.width, image.height));
+    const reduced = new ImageData(Math.max(2, Math.round(image.width * scale)), Math.max(2, Math.round(image.height * scale)));
+    for (let y = 0; y < reduced.height; y++) {
+        const sy = Math.floor((y + 0.5) * image.height / reduced.height);
+        for (let x = 0; x < reduced.width; x++) {
+            const sx = Math.floor((x + 0.5) * image.width / reduced.width);
+            const source = (sy * image.width + sx) * 4;
+            const target = (y * reduced.width + x) * 4;
+            reduced.data[target] = image.data[source];
+            reduced.data[target + 1] = image.data[source + 1];
+            reduced.data[target + 2] = image.data[source + 2];
+            reduced.data[target + 3] = 255;
+        }
+    }
+
+    const plain = layoutAlignment(warp(reduced, box));
+    const corrected = layoutAlignment(warp(reduced, corners));
+    return corrected >= plain * 1.12 + 12 ? corners : box;
+}
+
+export function renderScan(input: ImageData, corners: Corners, mode: ScanMode, automatic = false, straighten = true) {
     if (!validCorners(corners)) throw new Error('Invalid crop');
-    const output = warp(input, corners);
+    const selection = automatic ? (straighten ? conservativeCrop(input, corners) : imageCorners) : corners;
+    const output = fullFrame(selection) ? input : warp(input, selection);
     cleanPaper(output, mode);
-    return straightenLayout(output);
+    return straighten ? straightenLayout(output, automatic && !fullFrame(corners)) : output;
 }
