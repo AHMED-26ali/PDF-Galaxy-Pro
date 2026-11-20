@@ -200,6 +200,60 @@ function traceRule(profile: Profile, line: Line): Trace | null {
     return { anchor, offsets: smoothed.map(position => position - anchor), confidence: ratings.reduce((a, b) => a + b, 0) };
 }
 
+function tracePolynomial(trace: Trace) {
+    // Fit the displacement across the frame. Odd and even terms are orthogonal
+    // on equally spaced, symmetric samples.
+    let xy = 0;
+    let x3y = 0;
+    let x2y = 0;
+    let x2 = 0;
+    let x4 = 0;
+    let x6 = 0;
+    for (let index = 0; index < nodeCount; index++) {
+        const x = (2 * index / (nodeCount - 1) - 1) * 0.89;
+        const square = x * x;
+        const value = trace.offsets[index];
+        xy += x * value;
+        x2y += square * value;
+        x3y += square * x * value;
+        x2 += square;
+        x4 += square * square;
+        x6 += square * square * square;
+    }
+    const determinant = x2 * (x6 + 0.14) - x4 * x4;
+    return [
+        (xy * (x6 + 0.14) - x3y * x4) / determinant,
+        x2y / (x4 + 0.055),
+        (x2 * x3y - x4 * xy) / determinant,
+    ];
+}
+
+function smoothField(traces: Trace[]): Axis['shift'] {
+    const polynomials = traces.map(tracePolynomial);
+    const table = Array.from({ length: 257 }, (_, index) => {
+        const position = index / 256;
+        const weights = traces.map(trace => {
+            const distance = (position - trace.anchor) / 0.135;
+            return Math.exp(-0.5 * distance * distance) * trace.confidence;
+        });
+        const total = weights.reduce((sum, weight) => sum + weight, 0);
+        return [0, 1, 2].map(coefficient => polynomials.reduce((sum, terms, trace) => sum + weights[trace] * terms[coefficient], 0) / total);
+    });
+    return (across, along) => {
+        const x = 2 * across - 1;
+        const position = Math.max(0, Math.min(256, along * 256));
+        const lower = Math.floor(position);
+        const upper = Math.min(256, lower + 1);
+        const blend = position - lower;
+        const start = table[lower];
+        const end = table[upper];
+        const d0 = start[0] + (end[0] - start[0]) * blend;
+        const d1 = start[1] + (end[1] - start[1]) * blend;
+        const d2 = start[2] + (end[2] - start[2]) * blend;
+        return along + x * (d0 + x * (d1 + x * d2));
+    };
+}
+
 function trackedAxis(profile: Profile, lines: Line[], baseline: Axis): Axis | undefined {
     const ranked = lines.map(line => traceRule(profile, line)).filter((trace): trace is Trace => !!trace)
         .sort((a, b) => b.confidence - a.confidence);
@@ -220,20 +274,7 @@ function trackedAxis(profile: Profile, lines: Line[], baseline: Axis): Axis | un
     }
     traces.sort((a, b) => a.anchor - b.anchor);
     if (traces.length < 2) return undefined;
-    const offsetAt = (trace: Trace, across: number) => {
-        const node = (across - 0.055) / 0.89 * (nodeCount - 1);
-        const index = Math.min(nodeCount - 2, Math.max(0, Math.floor(node)));
-        return trace.offsets[index] + (trace.offsets[index + 1] - trace.offsets[index]) * (node - index);
-    };
-    const shift = (across: number, along: number) => {
-        const next = traces.findIndex(trace => trace.anchor >= along);
-        if (next <= 0) return along + offsetAt(traces[next === 0 ? 0 : traces.length - 1], across);
-        const from = traces[next - 1];
-        const to = traces[next];
-        const amount = (along - from.anchor) / (to.anchor - from.anchor);
-        return along + offsetAt(from, across) * (1 - amount) + offsetAt(to, across) * amount;
-    };
-    return paddedAxis(shift);
+    return paddedAxis(smoothField(traces));
 }
 
 function paddedAxis(shift: Axis['shift']): Axis {

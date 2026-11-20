@@ -176,6 +176,7 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
     const columns = Math.min(120, Math.ceil(width / 10));
     const rows = Math.min(120, Math.ceil(height / 10));
     const samples = new Float32Array(columns * rows);
+    const paperColor = mode === 'color' ? new Float32Array(samples.length * 3) : null;
     const fineColumns = Math.min(440, Math.ceil(width / 6));
     const fineRows = Math.min(440, Math.ceil(height / 6));
     const fineSamples = new Float32Array(fineColumns * fineRows);
@@ -184,7 +185,14 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
             const index = Math.floor(y * rows / height) * columns + Math.floor(x * columns / width);
             const pixel = (y * width + x) * 4;
             const level = data[pixel] * 0.299 + data[pixel + 1] * 0.587 + data[pixel + 2] * 0.114;
-            samples[index] = Math.max(samples[index], level);
+            if (level > samples[index]) {
+                samples[index] = level;
+                if (paperColor && level >= 90) {
+                    paperColor[index * 3] = data[pixel] / level;
+                    paperColor[index * 3 + 1] = data[pixel + 1] / level;
+                    paperColor[index * 3 + 2] = data[pixel + 2] / level;
+                }
+            }
             const fineIndex = Math.floor(y * fineRows / height) * fineColumns + Math.floor(x * fineColumns / width);
             fineSamples[fineIndex] = Math.max(fineSamples[fineIndex], level);
         }
@@ -207,23 +215,41 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
         }
     }
     const background = new Float32Array(samples.length);
+    const whiteBalance = paperColor ? new Float32Array(paperColor.length) : null;
     for (let y = 0; y < rows; y++) {
         for (let x = 0; x < columns; x++) {
             let sum = 0;
             let count = 0;
+            let red = 0;
+            let green = 0;
+            let blue = 0;
+            let colors = 0;
             for (let row = Math.max(0, y - 3); row <= Math.min(rows - 1, y + 3); row++) {
                 for (let column = Math.max(0, x - 3); column <= Math.min(columns - 1, x + 3); column++) {
                     const index = row * columns + column;
                     if (!exterior[index]) {
                         sum += samples[index];
                         count++;
+                        if (paperColor && paperColor[index * 3 + 1] > 0) {
+                            red += paperColor[index * 3];
+                            green += paperColor[index * 3 + 1];
+                            blue += paperColor[index * 3 + 2];
+                            colors++;
+                        }
                     }
                 }
             }
-            background[y * columns + x] = count ? Math.max(92, sum / count) : 255;
+            const index = y * columns + x;
+            background[index] = count ? Math.max(92, sum / count) : 255;
+            if (whiteBalance) {
+                whiteBalance[index * 3] = colors ? clamp(red / colors, 0.64, 1.42) : 1;
+                whiteBalance[index * 3 + 1] = colors ? clamp(green / colors, 0.64, 1.42) : 1;
+                whiteBalance[index * 3 + 2] = colors ? clamp(blue / colors, 0.64, 1.42) : 1;
+            }
         }
     }
 
+    const ratios = new Float32Array(3);
     for (let y = 0; y < height; y++) {
         const row = clamp((y + 0.5) * rows / height - 0.5, 0, rows - 1);
         const y0 = Math.floor(row);
@@ -250,11 +276,22 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
                 const ink = clamp((level / paperLight - 0.055) / 0.90, 0, 1);
                 const gray = 255 * ink ** 1.22;
                 data[pixel] = data[pixel + 1] = data[pixel + 2] = gray;
-            } else {
-                const gain = Math.min(1.9, 245 / light);
-                data[pixel] = r * gain;
-                data[pixel + 1] = g * gain;
-                data[pixel + 2] = b * gain;
+            } else if (whiteBalance) {
+                const paperLight = Math.max(light * 0.72, Math.min(light, shadowMap[maskIndex]));
+                const neutral = 255 / paperLight;
+                const corner1 = (y0 * columns + x0) * 3;
+                const corner2 = (y0 * columns + x1) * 3;
+                const corner3 = (y1 * columns + x0) * 3;
+                const corner4 = (y1 * columns + x1) * 3;
+                for (let channel = 0; channel < 3; channel++) {
+                    const top = whiteBalance[corner1 + channel] * (1 - fx) + whiteBalance[corner2 + channel] * fx;
+                    const bottom = whiteBalance[corner3 + channel] * (1 - fx) + whiteBalance[corner4 + channel] * fx;
+                    ratios[channel] = data[pixel + channel] * neutral / (top * (1 - fy) + bottom * fy);
+                }
+                const balanced = (ratios[0] * 0.299 + ratios[1] * 0.587 + ratios[2] * 0.114) / 255;
+                const enhanced = clamp((balanced - 0.031) / 0.924, 0, 1) ** 1.16;
+                const correction = (enhanced - balanced) * 255;
+                for (let channel = 0; channel < 3; channel++) data[pixel + channel] = ratios[channel] + correction;
             }
         }
     }
