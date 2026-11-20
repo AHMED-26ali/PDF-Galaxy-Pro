@@ -112,6 +112,10 @@ function fit(lines: Line[], getValue: (line: Line) => number, tolerance: number)
 function axis(lines: Line[], aspect: number, vertical: boolean): Axis {
     const identity: Axis = { shift: (_, along) => along, start: 0, end: 1 };
     if (lines.length < (vertical ? 3 : 2)) return identity;
+    const totalScore = lines.reduce((sum, line) => sum + line.score, 0);
+    const straightScore = lines.reduce((sum, line) =>
+        Math.abs(line.slope) <= 0.0125 && line.bend === 0 ? sum + line.score : sum, 0);
+    if (straightScore >= totalScore * 0.7) return identity;
     const centralAngle = median(lines.map(line => line.slope));
     const consistent = lines.filter(line => Math.abs(line.slope - centralAngle) <= 0.13);
     if (consistent.length < (vertical ? 3 : 2)) return identity;
