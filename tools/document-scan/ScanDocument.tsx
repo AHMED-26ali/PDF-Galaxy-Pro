@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUpTrayIcon, DocumentTextIcon, PhotoIcon } from '../../components/icons';
 import { canvasToBlob, clearCanvas, downloadFile, openPdf, pdfError, renderPdfPage, type PDFDocumentProxy } from '../pdfRuntime';
 import { scanPageJpeg, type PageSize } from './scanPage';
-import { detectCorners, imageCorners, validCorners, type Corners, type Point, type ScanMode, type ScanProfile, type ScanSettings } from './scanImage';
+import { detectCorners, imageCorners, validCorners, type Corners, type Point, type ScanMode, type ScanProfile, type ScanSettings, type ResolvedScanProfile } from './scanImage';
 
 type Source = {
     url: string;
@@ -12,7 +12,7 @@ type Source = {
     pixelSize: PageSize;
     pdfSize: PageSize;
 };
-type Scan = { url: string; blob: Blob };
+type Scan = { url: string; blob: Blob; profile: ResolvedScanProfile };
 
 const galleryTypes = 'image/*,.heic,.heif';
 const heicExtension = /\.hei[cf]$/i;
@@ -92,7 +92,7 @@ const ScanDocument: React.FC = () => {
     const [scan, setScan] = useState<Scan | null>(null);
     const [corners, setCorners] = useState<Corners>(imageCorners);
     const [cropEdited, setCropEdited] = useState(false);
-    const [profile, setProfile] = useState<ScanProfile>('detail');
+    const [profile, setProfile] = useState<ScanProfile>('auto');
     const [mode, setMode] = useState<ScanMode>('color');
     const [autoStraighten, setAutoStraighten] = useState(true);
     const [view, setView] = useState<'crop' | 'scan'>('crop');
@@ -120,19 +120,19 @@ const ScanDocument: React.FC = () => {
         if (scan) URL.revokeObjectURL(scan.url);
     }, [scan]);
 
-    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, pixelSize: PageSize, options: ScanSettings, suggestedCrop = false) {
+    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, pixelSize: PageSize, options: ScanSettings, suggested?: Corners) {
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas unavailable');
         const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const worker = new Worker(new URL('./scanImage.worker.ts', import.meta.url), { type: 'module' });
         workerRef.current = worker;
         try {
-            const result = await new Promise<ImageData>((resolve, reject) => {
-                worker.onmessage = ({ data }) => data.image ? resolve(data.image) : reject(new Error('Scan failed'));
+            const result = await new Promise<{ image: ImageData; profile: ResolvedScanProfile }>((resolve, reject) => {
+                worker.onmessage = ({ data }) => data.image ? resolve(data) : reject(new Error('Scan failed'));
                 worker.onerror = reject;
-                worker.postMessage({ image, corners: selection, settings: options, suggestedCrop }, [image.data.buffer]);
+                worker.postMessage({ image, corners: selection, settings: options, suggested }, [image.data.buffer]);
             });
-            return await scanPageJpeg(result, pixelSize);
+            return { blob: await scanPageJpeg(result.image, pixelSize), profile: result.profile };
         } finally {
             worker.terminate();
             if (workerRef.current === worker) workerRef.current = null;
@@ -145,11 +145,9 @@ const ScanDocument: React.FC = () => {
         setError('');
         setScan(null);
         try {
-            const suggestedCrop = options.profile === 'document' && options.straighten && !manualCrop;
-            const crop = suggestedCrop ? page.detected : selection;
-            const blob = await scanCanvas(page.canvas, crop, page.pixelSize, options, suggestedCrop);
+            const result = await scanCanvas(page.canvas, selection, page.pixelSize, options, manualCrop ? undefined : page.detected);
             if (job.current !== current) return;
-            setScan({ blob, url: URL.createObjectURL(blob) });
+            setScan({ ...result, url: URL.createObjectURL(result.blob) });
             setView('scan');
         } catch {
             if (job.current === current) {
@@ -293,8 +291,9 @@ const ScanDocument: React.FC = () => {
                     pageSize = pdfSize;
                     try {
                         if (job.current !== current) return;
-                        blob = await scanCanvas(canvas, pageSelections.current.get(number) ?? imageCorners,
+                        const result = await scanCanvas(canvas, pageSelections.current.get(number) ?? imageCorners,
                             { width: canvas.width, height: canvas.height }, settings);
+                        blob = result.blob;
                     } finally {
                         clearCanvas(canvas);
                     }
@@ -328,7 +327,13 @@ const ScanDocument: React.FC = () => {
         <div className="space-y-5">
             <fieldset disabled={busy}>
                 <legend className="mb-2 text-sm font-bold text-slate-700">نوع المعالجة</legend>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 sm:grid-cols-3">
+                    <button type="button" aria-pressed={profile === 'auto'}
+                        className={(profile === 'auto' ? primaryButton : secondaryButton) + ' text-start leading-relaxed'}
+                        onClick={() => changeProfile('auto')}>
+                        <span className="block">تلقائي</span>
+                        <span className="block text-xs font-normal">يختار التحسين المناسب للصفحة</span>
+                    </button>
                     <button type="button" aria-pressed={profile === 'document'}
                         className={(profile === 'document' ? primaryButton : secondaryButton) + ' text-start leading-relaxed'}
                         onClick={() => changeProfile('document')}>
@@ -387,7 +392,7 @@ const ScanDocument: React.FC = () => {
                             </button>
                         </div>
                         <button type="button" className={secondaryButton} disabled={busy}
-                            onClick={() => { setSource(null); setPdfDocument(null); setScan(null); setProfile('detail'); setView('crop'); setError(''); }}>
+                            onClick={() => { setSource(null); setPdfDocument(null); setScan(null); setProfile('auto'); setView('crop'); setError(''); }}>
                             اختيار ملف آخر
                         </button>
                     </div>
@@ -454,6 +459,11 @@ const ScanDocument: React.FC = () => {
                                 <h2 id="scan-result-title" className="mb-4 text-center text-lg font-black text-slate-900">
                                     معاينة الملف بعد التحسين
                                 </h2>
+                                {profile === 'auto' && (
+                                    <p className="mb-3 text-center text-sm text-slate-600">
+                                        {scan.profile === 'document' ? 'المعالجة التلقائية · سكان مستند' : 'المعالجة التلقائية · حفظ الصور والتفاصيل'}
+                                    </p>
+                                )}
                                 <img src={scan.url} alt="معاينة السكان بعد التحسين"
                                     className="mx-auto block h-auto max-h-[660px] max-w-full rounded bg-white object-contain shadow-sm" />
                                 <div className="mt-5 flex flex-wrap justify-center gap-3">

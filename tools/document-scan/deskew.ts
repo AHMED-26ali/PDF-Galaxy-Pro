@@ -200,6 +200,69 @@ function traceRule(profile: Profile, line: Line): Trace | null {
     return { anchor, offsets: smoothed.map(position => position - anchor), confidence: ratings.reduce((a, b) => a + b, 0) };
 }
 
+function needsPaperCleanup(image: ImageData) {
+    const columns = 18;
+    const rows = 24;
+    const cells: number[][] = [];
+    const bright: number[] = [];
+    for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < columns; x++) {
+            const values: number[] = [];
+            for (let j = 0; j < 8; j++) {
+                const py = Math.floor((0.05 + 0.90 * (y + (j + 0.5) / 8) / rows) * image.height);
+                for (let i = 0; i < 8; i++) {
+                    const px = Math.floor((0.045 + 0.91 * (x + (i + 0.5) / 8) / columns) * image.width);
+                    const index = (py * image.width + px) * 4;
+                    values.push(image.data[index] * 0.299 + image.data[index + 1] * 0.587 + image.data[index + 2] * 0.114);
+                }
+            }
+            values.sort((a, b) => a - b);
+            cells.push(values);
+            bright.push(values[57]);
+        }
+    }
+    bright.sort((a, b) => a - b);
+    const paper = bright[Math.floor(bright.length * 0.80)];
+    const darkerPaper = bright[Math.floor(bright.length * 0.14)];
+    if (paper >= 242 && paper - darkerPaper < 16) return false;
+    const texture = cells.map(values => {
+        let bands = 1;
+        for (let index = 6; index < 59; index++) {
+            if (Math.floor(values[index] / 7) > Math.floor(values[index - 1] / 7)) bands++;
+        }
+        if (bands < 4) return 0;
+        const span = values[46] - values[16];
+        if (span >= 17 && values[52] < paper - 10) return 2;
+        if (span >= 11 && values[52] < paper + 11) return 1;
+        return 0;
+    });
+    let lightTexture = 0;
+    for (let y = 0; y < rows - 1; y++) {
+        for (let x = 0; x < columns - 1; x++) {
+            const index = y * columns + x;
+            const density = Math.min(texture[index], texture[index + 1], texture[index + columns], texture[index + columns + 1]);
+            if (density === 2) return false;
+            if (density === 1) lightTexture++;
+        }
+    }
+    if (lightTexture >= 5) return false;
+    return true;
+}
+
+export function isRuledForm(image: ImageData) {
+    const sample = luminance(image);
+    if (Math.min(sample.width, sample.height) < 140) return false;
+    const rows = evidence(sample, false);
+    const rules: number[] = [];
+    for (const line of findLines(rows, false).sort((a, b) => b.score - a.score)) {
+        if (line.score < rows.width * 10.5 || rules.some(position => Math.abs(position - line.position) < 0.035)) continue;
+        if (traceRule(rows, line)) rules.push(line.position);
+    }
+    if (rules.length < 8) return false;
+    const spread = Math.max(...rules) - Math.min(...rules);
+    return spread >= 0.60 && needsPaperCleanup(image);
+}
+
 function tracePolynomial(trace: Trace) {
     // Fit the displacement across the frame. Odd and even terms are orthogonal
     // on equally spaced, symmetric samples.

@@ -1,10 +1,17 @@
-import { layoutAlignment, straightenLayout } from './deskew';
+import { isRuledForm, layoutAlignment, straightenLayout } from './deskew';
 
 export type Point = { x: number; y: number };
 export type Corners = [Point, Point, Point, Point];
 export type ScanMode = 'grayscale' | 'color';
-export type ScanProfile = 'document' | 'detail';
+export type ResolvedScanProfile = 'document' | 'detail';
+export type ScanProfile = 'auto' | ResolvedScanProfile;
 export type ScanSettings = { mode: ScanMode; profile: ScanProfile; straighten: boolean };
+type ResolvedScanSettings = Omit<ScanSettings, 'profile'> & { profile: ResolvedScanProfile };
+
+export function resolveProfile(image: ImageData, selected: ScanProfile): ResolvedScanProfile {
+    if (selected !== 'auto') return selected;
+    return isRuledForm(image) ? 'document' : 'detail';
+}
 type Line = { slope: number; intercept: number };
 
 export const imageCorners: Corners = [
@@ -193,7 +200,7 @@ function documentLighting(fineSamples: Float32Array, fineColumns: number, fineRo
     return { fineExterior, shadowMap };
 }
 
-function cleanPaper({ data, width, height }: ImageData, { mode, profile }: ScanSettings) {
+function cleanPaper({ data, width, height }: ImageData, { mode, profile }: ResolvedScanSettings) {
     const columns = Math.min(120, Math.ceil(width / 10));
     const rows = Math.min(120, Math.ceil(height / 10));
     const samples = new Float32Array(columns * rows);
@@ -363,7 +370,7 @@ function conservativeCrop(image: ImageData, corners: Corners): Corners {
     return corrected >= plain * 1.12 + 12 ? corners : box;
 }
 
-export function renderScan(input: ImageData, corners: Corners, settings: ScanSettings, suggestedCrop = false) {
+export function renderScan(input: ImageData, corners: Corners, settings: ResolvedScanSettings, suggestedCrop = false) {
     if (!validCorners(corners)) throw new Error('Invalid crop');
     const autoCrop = suggestedCrop && settings.profile === 'document' && settings.straighten;
     const selection = autoCrop ? conservativeCrop(input, corners) : corners;
