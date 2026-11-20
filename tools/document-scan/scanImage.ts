@@ -1,3 +1,5 @@
+import { straightenLayout } from './deskew';
+
 export type Point = { x: number; y: number };
 export type Corners = [Point, Point, Point, Point];
 export type ScanMode = 'grayscale' | 'color';
@@ -174,16 +176,36 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
     const columns = Math.min(120, Math.ceil(width / 10));
     const rows = Math.min(120, Math.ceil(height / 10));
     const samples = new Float32Array(columns * rows);
+    const fineColumns = Math.min(440, Math.ceil(width / 6));
+    const fineRows = Math.min(440, Math.ceil(height / 6));
+    const fineSamples = new Float32Array(fineColumns * fineRows);
     for (let y = 0; y < height; y += 2) {
         for (let x = 0; x < width; x += 2) {
             const index = Math.floor(y * rows / height) * columns + Math.floor(x * columns / width);
             const pixel = (y * width + x) * 4;
             const level = data[pixel] * 0.299 + data[pixel + 1] * 0.587 + data[pixel + 2] * 0.114;
             samples[index] = Math.max(samples[index], level);
+            const fineIndex = Math.floor(y * fineRows / height) * fineColumns + Math.floor(x * fineColumns / width);
+            fineSamples[fineIndex] = Math.max(fineSamples[fineIndex], level);
         }
     }
     // Use light pixels for the lighting map and exclude dark areas that meet the photo border.
     const exterior = exteriorMask(samples, columns, rows);
+    const fineExterior = exteriorMask(fineSamples, fineColumns, fineRows);
+    const shadowMap = new Float32Array(fineSamples.length);
+    for (let y = 0; y < fineRows; y++) {
+        for (let x = 0; x < fineColumns; x++) {
+            const index = y * fineColumns + x;
+            if (fineExterior[index]) continue;
+            let highlight = fineSamples[index];
+            for (let row = Math.max(0, y - 1); row <= Math.min(fineRows - 1, y + 1); row++) {
+                for (let column = Math.max(0, x - 1); column <= Math.min(fineColumns - 1, x + 1); column++) {
+                    highlight = Math.max(highlight, fineSamples[row * fineColumns + column]);
+                }
+            }
+            shadowMap[index] = highlight;
+        }
+    }
     const background = new Float32Array(samples.length);
     for (let y = 0; y < rows; y++) {
         for (let x = 0; x < columns; x++) {
@@ -220,11 +242,12 @@ function cleanPaper({ data, width, height }: ImageData, mode: ScanMode) {
             const g = data[pixel + 1];
             const b = data[pixel + 2];
             const level = r * 0.299 + g * 0.587 + b * 0.114;
-            const maskIndex = Math.floor(y * rows / height) * columns + Math.floor(x * columns / width);
-            if (exterior[maskIndex]) {
+            const maskIndex = Math.floor(y * fineRows / height) * fineColumns + Math.floor(x * fineColumns / width);
+            if (fineExterior[maskIndex]) {
                 data[pixel] = data[pixel + 1] = data[pixel + 2] = 255;
             } else if (mode === 'grayscale') {
-                const ink = clamp((level / light - 0.055) / 0.90, 0, 1);
+                const paperLight = Math.max(light * 0.72, Math.min(light, shadowMap[maskIndex]));
+                const ink = clamp((level / paperLight - 0.055) / 0.90, 0, 1);
                 const gray = 255 * ink ** 1.22;
                 data[pixel] = data[pixel + 1] = data[pixel + 2] = gray;
             } else {
@@ -241,5 +264,5 @@ export function renderScan(input: ImageData, corners: Corners, mode: ScanMode) {
     if (!validCorners(corners)) throw new Error('Invalid crop');
     const output = warp(input, corners);
     cleanPaper(output, mode);
-    return output;
+    return straightenLayout(output);
 }

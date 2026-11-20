@@ -64,7 +64,7 @@ export const tools: Tool[] = [
     {
         id: 'document-scan',
         title: 'تحويل صورة المستند إلى سكان',
-        description: 'عدّل ميل الورقة، واقصص الخلفية، ووضّح الكتابة في صور المستندات. احفظ النتيجة JPG أو PDF.',
+        description: 'حسّن صور المستندات وملفات PDF، وصحّح ميل الورقة ووضّح الكتابة. احفظ النتيجة JPG أو PDF.',
         icon: ViewfinderCircleIcon,
         component: ScanDocument,
         category: 'convert',

@@ -26,7 +26,7 @@ export const toolSearchPages: Record<string, ToolSearchPage> = {
     },
     'document-scan': {
         title: 'تحويل صورة المستند إلى سكان PDF أو JPG أونلاين',
-        description: 'صحّح ميل الورقة، وأزل الخلفية وخفّف الظلال في صور المستندات. عاين النتيجة ونزّل سكان JPG أو PDF بحجم A4.',
+        description: 'ارفع صورة أو ملف PDF، وصحّح ميل الورقة وخفّف الظلال. عاين النتيجة ونزّل سكان JPG أو PDF بحجم A4.',
     },
     'pdf-to-image': {
         title: 'تحويل PDF إلى صور JPG أو PNG أو WebP',

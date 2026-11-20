@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUpTrayIcon, PhotoIcon } from '../../components/icons';
+import { ArrowUpTrayIcon, DocumentTextIcon, PhotoIcon } from '../../components/icons';
+import { canvasToBlob, clearCanvas, downloadFile, openPdf, pdfError, renderPdfPage, type PDFDocumentProxy } from '../pdfRuntime';
+import { scanPageJpeg } from './scanPage';
 import { detectCorners, imageCorners, validCorners, type Corners, type Point, type ScanMode } from './scanImage';
 
 type Source = { url: string; fileName: string; canvas: HTMLCanvasElement; detected: Corners };
-type Scan = { url: string; blob: Blob; width: number; height: number };
+type Scan = { url: string; blob: Blob };
 
 const galleryTypes = 'image/*,.heic,.heif';
 const heicExtension = /\.hei[cf]$/i;
@@ -51,20 +53,32 @@ function imageCanvas(image: CanvasImageSource, width: number, height: number, ma
     return { canvas, ctx };
 }
 
-function jpegFromImage(image: ImageData) {
-    const canvas = document.createElement('canvas');
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas unavailable');
-    ctx.putImageData(image, 0, 0);
-    return new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not encode JPEG')), 'image/jpeg', 0.95);
-    });
+async function pdfCanvas(pdf: PDFDocumentProxy, pageNumber: number) {
+    const page = await pdf.getPage(pageNumber);
+    try {
+        return await renderPdfPage(page, 4.2, 3508);
+    } finally {
+        page.cleanup();
+    }
+}
+
+async function pdfPageSource(pdf: PDFDocumentProxy, pageNumber: number, fileName: string): Promise<Source> {
+    const canvas = await pdfCanvas(pdf, pageNumber);
+    try {
+        const blob = await canvasToBlob(canvas, 'image/jpeg', 0.9);
+        return { url: URL.createObjectURL(blob), fileName, canvas, detected: imageCorners };
+    } catch (error) {
+        clearCanvas(canvas);
+        throw error;
+    }
 }
 
 const ScanDocument: React.FC = () => {
     const [source, setSource] = useState<Source | null>(null);
+    const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+    const [pageNumber, setPageNumber] = useState(1);
+    const [exportPage, setExportPage] = useState(0);
+    const pageSelections = useRef(new Map<number, Corners>());
     const [scan, setScan] = useState<Scan | null>(null);
     const [corners, setCorners] = useState<Corners>(imageCorners);
     const [mode, setMode] = useState<ScanMode>('grayscale');
@@ -80,89 +94,150 @@ const ScanDocument: React.FC = () => {
         workerRef.current?.terminate();
     }, []);
     useEffect(() => () => {
-        if (source) URL.revokeObjectURL(source.url);
+        if (source) {
+            URL.revokeObjectURL(source.url);
+            clearCanvas(source.canvas);
+        }
     }, [source]);
+    useEffect(() => () => {
+        void pdfDocument?.destroy().catch(() => {});
+    }, [pdfDocument]);
     useEffect(() => () => {
         if (scan) URL.revokeObjectURL(scan.url);
     }, [scan]);
 
+    async function scanCanvas(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode) {
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas unavailable');
+        const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const worker = new Worker(new URL('./scanImage.worker.ts', import.meta.url), { type: 'module' });
+        workerRef.current = worker;
+        try {
+            const result = await new Promise<ImageData>((resolve, reject) => {
+                worker.onmessage = ({ data }) => data.image ? resolve(data.image) : reject(new Error('Scan failed'));
+                worker.onerror = reject;
+                worker.postMessage({ image, corners: selection, mode: scanMode }, [image.data.buffer]);
+            });
+            return await scanPageJpeg(result);
+        } finally {
+            worker.terminate();
+            if (workerRef.current === worker) workerRef.current = null;
+        }
+    }
+
     async function process(canvas: HTMLCanvasElement, selection: Corners, scanMode: ScanMode) {
         const current = ++job.current;
-        workerRef.current?.terminate();
         setStatus('processing');
         setError('');
         setScan(null);
-        let worker: Worker | undefined;
         try {
-            const image = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);
-            worker = new Worker(new URL('./scanImage.worker.ts', import.meta.url), { type: 'module' });
-            workerRef.current = worker;
-            const result = await new Promise<ImageData>((resolve, reject) => {
-                worker!.onmessage = ({ data }) => data.image ? resolve(data.image) : reject(new Error('Scan failed'));
-                worker!.onerror = reject;
-                worker!.postMessage({ image, corners: selection, mode: scanMode }, [image.data.buffer]);
-            });
-            const blob = await jpegFromImage(result);
+            const blob = await scanCanvas(canvas, selection, scanMode);
             if (job.current !== current) return;
-            setScan({ blob, url: URL.createObjectURL(blob), width: result.width, height: result.height });
+            setScan({ blob, url: URL.createObjectURL(blob) });
             setView('scan');
         } catch {
-            if (job.current === current) setError('تعذّر تجهيز السكان. جرّب تعديل الأركان أو اختر صورة أخرى.');
-        } finally {
-            worker?.terminate();
             if (job.current === current) {
-                workerRef.current = null;
-                setStatus('idle');
+                setView('crop');
+                setError('تعذّر تجهيز السكان. جرّب تعديل الأركان أو اختر ملفًا آخر.');
             }
+        } finally {
+            if (job.current === current) setStatus('idle');
         }
     }
 
     async function selectFile(file?: File) {
         if (!file) return;
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         const hasImageType = !file.type || file.type === 'application/octet-stream'
             || (file.type.startsWith('image/') && file.type !== 'image/svg+xml');
-        if (!hasImageType && !heicExtension.test(file.name)) {
-            setError('اختر صورة للورقة من المعرض أو التقطها بالكاميرا.');
+        if (!isPdf && !hasImageType && !heicExtension.test(file.name)) {
+            setError('اختر صورة للورقة أو ملف PDF.');
             return;
         }
         const current = ++job.current;
         setStatus('loading');
         setError('');
+        const fileName = file.name.replace(/\.[^.]+$/, '') || 'document';
         let url: string | undefined;
+        let openedPdf: PDFDocumentProxy | undefined;
         try {
-            const photo = await openPhoto(file);
-            url = photo.url;
+            let next: Source;
+            if (isPdf) {
+                openedPdf = await openPdf(file);
+                if (job.current !== current) return;
+                next = await pdfPageSource(openedPdf, 1, fileName);
+                url = next.url;
+            } else {
+                const photo = await openPhoto(file);
+                url = photo.url;
+                const { image } = photo;
+                const { canvas } = imageCanvas(image, image.naturalWidth, image.naturalHeight, 3600);
+                const preview = imageCanvas(canvas, canvas.width, canvas.height, 384);
+                const detected = detectCorners(preview.ctx.getImageData(0, 0, preview.canvas.width, preview.canvas.height));
+                next = { url, fileName, canvas, detected };
+            }
             if (job.current !== current) {
-                URL.revokeObjectURL(url);
+                URL.revokeObjectURL(next.url);
+                clearCanvas(next.canvas);
                 return;
             }
-            const { image } = photo;
-            const { canvas } = imageCanvas(image, image.naturalWidth, image.naturalHeight, 3600);
-            const preview = imageCanvas(canvas, canvas.width, canvas.height, 384);
-            const detected = detectCorners(preview.ctx.getImageData(0, 0, preview.canvas.width, preview.canvas.height));
-            setSource({ url, fileName: file.name.replace(/\.[^.]+$/, '') || 'document', canvas, detected });
-            setCorners(detected);
+            pageSelections.current.clear();
+            setPdfDocument(openedPdf ?? null);
+            openedPdf = undefined;
+            setPageNumber(1);
+            setSource(next);
+            setCorners(next.detected);
             setView('crop');
-            await process(canvas, detected, mode);
-        } catch {
+            await process(next.canvas, next.detected, mode);
+        } catch (error) {
             if (url) URL.revokeObjectURL(url);
             if (job.current === current) {
-                setError('تعذّر فتح الصورة. جرّب صورة JPG أو PNG أو HEIC سليمة، أو التقط صورة جديدة.');
+                setError(isPdf ? pdfError(error, 'تعذّر فتح ملف PDF. اختر ملفًا سليمًا.') :
+                    'تعذّر فتح الصورة. جرّب صورة JPG أو PNG أو HEIC سليمة.');
                 setStatus('idle');
             }
+        } finally {
+            void openedPdf?.destroy().catch(() => {});
         }
     }
 
-    function handlePhotoInput(event: React.ChangeEvent<HTMLInputElement>) {
+    function handleFileInput(event: React.ChangeEvent<HTMLInputElement>) {
         const input = event.currentTarget as HTMLInputElement;
         const file = input.files?.[0];
         input.value = '';
         void selectFile(file);
     }
 
+    async function showPdfPage(number: number) {
+        if (!pdfDocument || !source || number < 1 || number > pdfDocument.numPages || number === pageNumber) return;
+        const current = ++job.current;
+        setStatus('loading');
+        setError('');
+        try {
+            const next = await pdfPageSource(pdfDocument, number, source.fileName);
+            if (job.current !== current) {
+                URL.revokeObjectURL(next.url);
+                clearCanvas(next.canvas);
+                return;
+            }
+            const selection = pageSelections.current.get(number) ?? next.detected;
+            setPageNumber(number);
+            setSource(next);
+            setCorners(selection);
+            setView('crop');
+            await process(next.canvas, selection, mode);
+        } catch {
+            if (job.current === current) {
+                setError('تعذّر فتح الصفحة. جرّب مرة أخرى.');
+                setStatus('idle');
+            }
+        }
+    }
+
     function changeCorners(next: Corners) {
         if (!validCorners(next) || next.every((point, index) => point === corners[index])) return;
         setCorners(next);
+        if (pdfDocument) pageSelections.current.set(pageNumber, next);
         setScan(null);
     }
 
@@ -177,26 +252,36 @@ const ScanDocument: React.FC = () => {
 
     async function downloadPdf() {
         if (!scan || !source) return;
-        const current = job.current;
+        const current = ++job.current;
+        const pageCount = pdfDocument?.numPages ?? 1;
+        setExportPage(1);
         setStatus('pdf');
         setError('');
         try {
             const { PDFDocument, PageSizes } = await import('pdf-lib');
-            const pdf = await PDFDocument.create();
-            const image = await pdf.embedJpg(await scan.blob.arrayBuffer());
-            const landscape = scan.width > scan.height;
-            const [width, height] = landscape ? [PageSizes.A4[1], PageSizes.A4[0]] : PageSizes.A4;
-            const page = pdf.addPage([width, height]);
-            const size = image.scaleToFit(width - 24, height - 24);
-            page.drawImage(image, { ...size, x: (width - size.width) / 2, y: (height - size.height) / 2 });
-            const bytes = await pdf.save();
-            if (job.current !== current) return;
-            const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = source.fileName + '-scan.pdf';
-            link.click();
-            window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+            const output = await PDFDocument.create();
+            for (let number = 1; number <= pageCount; number++) {
+                if (job.current !== current) return;
+                setExportPage(number);
+                let blob = scan.blob;
+                if (pdfDocument && number !== pageNumber) {
+                    const canvas = await pdfCanvas(pdfDocument, number);
+                    try {
+                        if (job.current !== current) return;
+                        blob = await scanCanvas(canvas, pageSelections.current.get(number) ?? imageCorners, mode);
+                    } finally {
+                        clearCanvas(canvas);
+                    }
+                }
+                if (job.current !== current) return;
+                const image = await output.embedJpg(await blob.arrayBuffer());
+                const [width, height] = image.width > image.height ? [PageSizes.A4[1], PageSizes.A4[0]] : PageSizes.A4;
+                const page = output.addPage([width, height]);
+                const size = image.scaleToFit(width, height);
+                page.drawImage(image, { ...size, x: (width - size.width) / 2, y: (height - size.height) / 2 });
+            }
+            const bytes = await output.save();
+            if (job.current === current) downloadFile(bytes, source.fileName + '-scan.pdf', 'application/pdf');
         } catch {
             if (job.current === current) setError('تعذّر تنزيل ملف PDF. جرّب مرة أخرى.');
         } finally {
@@ -209,28 +294,33 @@ const ScanDocument: React.FC = () => {
     return (
         <div className="space-y-5">
             {!source && status !== 'loading' && (
-                <section aria-label="رفع صورة المستند"
+                <section aria-label="رفع المستند"
                     className="rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/50 p-5 text-center sm:p-10"
                     onDragOver={event => event.preventDefault()}
                     onDrop={event => {
                         event.preventDefault();
                         void selectFile(event.dataTransfer.files[0]);
                     }}>
-                    <h2 className="text-xl font-black text-slate-900 sm:text-2xl">ارفع صورة الورقة</h2>
-                    <p className="mt-2 text-sm leading-relaxed text-slate-600">اختر صورة من الموبايل أو التقطها بالكاميرا. يمكنك أيضًا سحب الصورة وإفلاتها هنا.</p>
+                    <h2 className="text-xl font-black text-slate-900 sm:text-2xl">ارفع صورة أو ملف PDF</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-600">اختر ملفًا من جهازك أو التقط صورة للورقة بالكاميرا. يمكنك أيضًا سحب الملف وإفلاته هنا.</p>
                     <div className="mt-5 flex flex-wrap justify-center gap-3">
                         <label className={primaryButton + ' inline-flex cursor-pointer items-center justify-center gap-2 focus-within:ring-2 focus-within:ring-blue-700 focus-within:ring-offset-2'}>
                             <ArrowUpTrayIcon className="h-5 w-5" />
                             اختيار صورة من المعرض
-                            <input className="sr-only" type="file" accept={galleryTypes} onChange={handlePhotoInput} />
+                            <input className="sr-only" type="file" accept={galleryTypes} onChange={handleFileInput} />
+                        </label>
+                        <label className={secondaryButton + ' inline-flex cursor-pointer items-center justify-center gap-2 focus-within:ring-2 focus-within:ring-blue-700 focus-within:ring-offset-2'}>
+                            <DocumentTextIcon className="h-5 w-5" />
+                            رفع ملف PDF
+                            <input className="sr-only" type="file" accept=".pdf,application/pdf" onChange={handleFileInput} />
                         </label>
                         <label className={secondaryButton + ' inline-flex cursor-pointer items-center justify-center gap-2 focus-within:ring-2 focus-within:ring-blue-700 focus-within:ring-offset-2'}>
                             <PhotoIcon className="h-5 w-5" />
                             تصوير الورقة بالكاميرا
-                            <input className="sr-only" type="file" accept="image/*" capture="environment" onChange={handlePhotoInput} />
+                            <input className="sr-only" type="file" accept="image/*" capture="environment" onChange={handleFileInput} />
                         </label>
                     </div>
-                    <p className="mt-4 text-xs text-slate-600">يدعم صور JPG وPNG وWebP وHEIC. تُعالج الصورة على جهازك.</p>
+                    <p className="mt-4 text-xs text-slate-600">يدعم ملفات PDF وصور JPG وPNG وWebP وHEIC. تتم المعالجة على جهازك.</p>
                 </section>
             )}
             {source && (
@@ -247,11 +337,22 @@ const ScanDocument: React.FC = () => {
                             </button>
                         </div>
                         <button type="button" className={secondaryButton} disabled={busy}
-                            onClick={() => { setSource(null); setScan(null); setView('crop'); setError(''); }}>
-                            اختيار صورة أخرى
+                            onClick={() => { setSource(null); setPdfDocument(null); setScan(null); setView('crop'); setError(''); }}>
+                            اختيار ملف آخر
                         </button>
                     </div>
 
+                    {pdfDocument && pdfDocument.numPages > 1 && (
+                        <div className="flex flex-wrap items-center justify-center gap-3" aria-label="التنقل بين الصفحات" role="group">
+                            <button type="button" className={secondaryButton} disabled={busy || pageNumber === 1}
+                                onClick={() => showPdfPage(pageNumber - 1)}>الصفحة السابقة</button>
+                            <span role="status" className="text-sm font-semibold text-slate-700">
+                                صفحة {pageNumber} من {pdfDocument.numPages}
+                            </span>
+                            <button type="button" className={secondaryButton} disabled={busy || pageNumber === pdfDocument.numPages}
+                                onClick={() => showPdfPage(pageNumber + 1)}>الصفحة التالية</button>
+                        </div>
+                    )}
                     <div className="rounded-2xl bg-slate-100 p-5 sm:p-6">
                         {view === 'crop' ? (
                             <>
@@ -306,11 +407,12 @@ const ScanDocument: React.FC = () => {
                                 <img src={scan.url} alt="معاينة السكان بعد التحسين"
                                     className="mx-auto block h-auto max-h-[660px] max-w-full rounded bg-white object-contain shadow-sm" />
                                 <div className="mt-5 flex flex-wrap justify-center gap-3">
-                                    <a className={secondaryButton} href={scan.url} download={source.fileName + '-scan.jpg'}>
-                                        تنزيل كصورة JPG
+                                    <a className={secondaryButton} href={scan.url}
+                                        download={source.fileName + (pdfDocument && pdfDocument.numPages > 1 ? '-page-' + pageNumber : '-scan') + '.jpg'}>
+                                        {pdfDocument && pdfDocument.numPages > 1 ? 'تنزيل الصفحة JPG' : 'تنزيل كصورة JPG'}
                                     </a>
                                     <button type="button" className={primaryButton} disabled={busy} onClick={downloadPdf}>
-                                        تنزيل كملف PDF بحجم A4
+                                        {pdfDocument && pdfDocument.numPages > 1 ? 'تنزيل كل الصفحات PDF بحجم A4' : 'تنزيل كملف PDF بحجم A4'}
                                     </button>
                                 </div>
                             </section>
@@ -339,7 +441,9 @@ const ScanDocument: React.FC = () => {
             )}
             {busy && (
                 <p role="status" className="rounded-xl bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
-                    {status === 'loading' ? 'جاري فتح الصورة…' : status === 'pdf' ? 'جاري تجهيز ملف PDF…' : 'جاري تسوية الورقة وتحسين وضوح الكتابة…'}
+                    {status === 'loading' ? 'جاري فتح الملف…' : status === 'pdf' && pdfDocument && pdfDocument.numPages > 1
+                        ? `جاري تجهيز الصفحة ${exportPage} من ${pdfDocument.numPages}…`
+                        : status === 'pdf' ? 'جاري تجهيز ملف PDF…' : 'جاري تسوية الورقة وتحسين وضوح الكتابة…'}
                 </p>
             )}
             {error && <p role="alert" className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">{error}</p>}
