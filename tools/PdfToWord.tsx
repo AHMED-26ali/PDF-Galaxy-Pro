@@ -4,11 +4,17 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { DocumentTextIcon, ArrowDownTrayIcon, ClipboardIcon, CheckIcon, SparklesIcon } from '../components/icons';
 import { Document, Packer, Paragraph, TextRun, AlignmentType } from 'docx';
 
-import { readDocumentText } from './ocrRuntime';
+import { OcrStartupError, readDocumentText } from './ocrRuntime';
 import { downloadFile as download, pdfError } from './pdfRuntime';
 import { convertPdfLayoutToWord } from './pdfToWordLayout';
 
 const wordMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const ocrSetupMessages: Partial<Record<string, string>> = {
+    'loading tesseract core': 'جاري تحميل محرّك التعرّف الضوئي…',
+    'initializing tesseract': 'جاري تشغيل محرّك التعرّف الضوئي…',
+    'loading language traineddata': 'جاري تحميل ملفات اللغة العربية والإنجليزية…',
+    'initializing api': 'جاري تجهيز التعرّف على النص…',
+};
 const PdfToWord: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -58,6 +64,8 @@ const PdfToWord: React.FC = () => {
                 return;
             }
             const pages = await readDocumentText(file, useOcrFallback, setStatus, message => {
+                const setupStatus = ocrSetupMessages[message.status];
+                if (setupStatus) setStatus(setupStatus);
                 if (message.status === 'recognizing text') setOcrProgress(Math.round(message.progress * 100));
             });
             if (!pages) {
@@ -84,7 +92,12 @@ const PdfToWord: React.FC = () => {
             setExtractedText(pages.join('\n\n'));
             download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', wordMime);
         } catch (error) {
-            setError(pdfError(error, 'تعذّر تحويل الملف إلى Word. تأكد من سلامة ملف PDF.'));
+            if (error instanceof OcrStartupError) {
+                setError(error.message);
+                if (useOcrFallback) setNeedsOcr(true);
+            } else {
+                setError(pdfError(error, 'تعذّر تحويل الملف إلى Word. تأكد من سلامة ملف PDF.'));
+            }
         } finally {
             setIsLoading(false);
             setStatus('');
@@ -114,7 +127,7 @@ const PdfToWord: React.FC = () => {
             return (
                 <div className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl border border-slate-200 shadow-sm max-w-xl mx-auto">
                     <LoadingSpinner />
-                    <p className="text-base font-bold text-slate-800 mt-4">{status}</p>
+                    <p role="status" className="text-base font-bold text-slate-800 mt-4">{status}</p>
                     {ocrProgress > 0 && (
                         <div className="w-full bg-slate-100 rounded-full h-3 mt-4 overflow-hidden border border-slate-200">
                             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 h-full rounded-full transition-all duration-300" style={{ width: `${ocrProgress}%` }}></div>
@@ -136,8 +149,8 @@ const PdfToWord: React.FC = () => {
                         ملف الـ PDF لا يحتوي على نصوص نصية مدمجة (عبارة عن صور). يمكنك استخدام تقنية التعرف الضوئي الذكي (OCR) لاستخراج النصوص وتحويلها إلى مستند Word.
                     </p>
                     <div className="flex flex-wrap justify-center gap-3">
-                        <button onClick={resetState} className="bg-white text-slate-700 font-bold py-2.5 px-6 rounded-2xl border border-slate-200 hover:bg-slate-50 transition-colors text-sm">
-                            إلغاء
+                        <button onClick={() => { setNeedsOcr(false); setError(null); }} className="bg-white text-slate-700 font-bold py-2.5 px-6 rounded-2xl border border-slate-200 hover:bg-slate-50 transition-colors text-sm">
+                            تغيير طريقة التحويل
                         </button>
                         <button onClick={() => convert(true)} className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-2.5 px-7 rounded-2xl shadow-md shadow-blue-500/20 hover:opacity-95 transition-opacity text-sm flex items-center gap-2">
                             <SparklesIcon className="w-4 h-4" />
