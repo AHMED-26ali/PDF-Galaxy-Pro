@@ -9,7 +9,7 @@ import { wordImageSection } from './pdfToWordLayout';
 import { canvasToBlob, clearCanvas, renderPdfPage, withPdf } from './pdfRuntime';
 import { scanGrid } from './wordScanGrid';
 
-type PositionedText = { box: Bbox; text: string; manual?: boolean; confidence?: number; color?: string };
+type PositionedText = { box: Bbox; text: string; manual?: boolean; confidence?: number; color?: string; plain?: boolean; bold?: boolean };
 type Offset = { x: number; y: number };
 const arabic = /[\u0600-\u08ff]/;
 export type PositionedWordDraft = {
@@ -131,7 +131,7 @@ function removePrintedText(canvas: HTMLCanvasElement, lines: PositionedText[]) {
         const area = ctx.getImageData(box.x0 - 4, box.y0 - 4, box.x1 - box.x0 + 8, box.y1 - box.y0 + 8);
         const source = area.data.slice();
         let printed = 0;
-        let lightEdges = 0, edges = 0;
+        let lightEdges = 0, whiteEdges = 0, edges = 0;
         const colors = [
             { n: 0, rgb: [0, 0, 0] },
             { n: 0, rgb: [0, 0, 0] },
@@ -148,12 +148,14 @@ function removePrintedText(canvas: HTMLCanvasElement, lines: PositionedText[]) {
             if (y < 3 || y >= area.height - 3 || x < 3 || x >= area.width - 3) {
                 edges++;
                 if (Math.min(source[index], source[index + 1], source[index + 2]) >= 205) lightEdges++;
+                if (Math.min(source[index], source[index + 1], source[index + 2]) >= 244) whiteEdges++;
             }
         }
         const colored = colors.reduce((sum, entry) => sum + entry.n, 0);
         const family = colors.indexOf(colors.reduce((best, color) => color.n > best.n ? color : best));
         const accent = colored > printed * 1.8 && colors[family].n >= 12 &&
             colors[family].n >= colored * 0.82 && lightEdges >= edges * 0.84;
+        const plain = whiteEdges >= edges * 0.90;
         const ink = (index: number) => accent
             ? coloredInk(source, index) && colorFamily(source, index) === family
             : neutralInk(source, index);
@@ -161,20 +163,29 @@ function removePrintedText(canvas: HTMLCanvasElement, lines: PositionedText[]) {
         if (!item.manual && (detected < area.width * area.height * 0.014 || (!accent && colored > printed * 0.55))) continue;
         const dividers = new Uint8Array(area.width);
         for (let x = 0; x < area.width; x++) {
+            if (!ink(x * 4) || !ink(((area.height - 1) * area.width + x) * 4)) continue;
             let dark = 0;
             for (let y = 0; y < area.height; y++) {
                 if (ink((y * area.width + x) * 4)) dark++;
             }
             if (dark > area.height * 0.82) dividers[x] = 1;
         }
+        let textPixels = 0;
         for (let y = 2; y < area.height - 2; y++) {
             const row = y * area.width;
             let dark = 0;
             for (let x = 0; x < area.width; x++) if (ink((row + x) * 4)) dark++;
-            if (dark > area.width * 0.83) continue;
+            if (dark > area.width * 0.83 && ink(row * 4) && ink((row + area.width - 1) * 4)) continue;
             for (let x = 2; x < area.width - 2; x++) {
                 const point = (y * area.width + x) * 4;
-                if (dividers[x] || !ink(point)) continue;
+                if (dividers[x]) continue;
+                const isInk = ink(point);
+                if (isInk) textPixels++;
+                if (plain) {
+                    area.data[point] = area.data[point + 1] = area.data[point + 2] = 255;
+                    continue;
+                }
+                if (!isInk) continue;
                 // Interpolate through the print strokes while leaving colored artwork intact.
                 let left = x - 1, right = x + 1;
                 while (left > 0 && ink((row + left) * 4)) left--;
@@ -187,10 +198,11 @@ function removePrintedText(canvas: HTMLCanvasElement, lines: PositionedText[]) {
                 }
             }
         }
+        if (!item.manual && textPixels < area.width * area.height * 0.012) continue;
         ctx.putImageData(area, box.x0 - 4, box.y0 - 4);
         const color = accent ? colors[family].rgb.map(sum =>
             Math.round(sum / colors[family].n).toString(16).padStart(2, '0')).join('').toUpperCase() : undefined;
-        editable.push({ ...item, color });
+        editable.push({ ...item, color, plain, bold: accent && textPixels > area.width * area.height * 0.25 });
     }
     return { ctx, width, height, editable };
 }
@@ -207,7 +219,8 @@ function editableShape(item: PositionedText, bounds: { width: number; height: nu
     const measuredHeight = measured.actualBoundingBoxAscent + measured.actualBoundingBoxDescent;
     const measuredSize = 150 * Math.min(inkWidth / Math.max(1, measured.width), inkHeight / Math.max(1, measuredHeight));
     // Arabic glyph widths can grow in Word when its installed font differs from the browser font.
-    const fontSize = Math.max(9, Math.min(84, Math.round(Math.min(inkHeight * 1.85, measuredSize) * (rtl ? 0.63 : 0.97))));
+    const fit = rtl ? (item.plain ? 0.89 : 0.63) : 0.97;
+    const fontSize = Math.max(9, Math.min(84, Math.round(Math.min(inkHeight * 1.85, measuredSize) * fit)));
     const extra = Math.max(2, Math.min(inkWidth * 0.20, 14));
     const x = Math.max(0, box.x0 * horizontalScale - (rtl ? extra : 0));
     const shapeWidth = Math.min(inkWidth + extra, page.x - x);
@@ -228,7 +241,7 @@ function editableShape(item: PositionedText, bounds: { width: number; height: nu
             bidirectional: rtl,
             alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
             spacing: { before: 0, after: 0 },
-            children: [new TextRun({ text, font: 'Arial', size: fontSize, sizeComplexScript: fontSize, color: item.color ?? '161616', rightToLeft: rtl })],
+            children: [new TextRun({ text, font: 'Arial', size: fontSize, sizeComplexScript: fontSize, bold: item.bold, color: item.color ?? '161616', rightToLeft: rtl })],
         })],
     });
 }
@@ -260,7 +273,7 @@ export async function exportPositionedWord(draft: PositionedWordDraft, reviewed:
             if (!ctx) throw new Error('تعذّر تجهيز صفحة Word.');
             ctx.drawImage(bitmap, 0, 0);
             const fields = page.fields.flatMap(field => {
-                const text = (reviewed[field.id] ?? field.text).trim();
+                const text = (reviewed[field.id] ?? (field.confidence !== undefined && field.confidence < 72 ? '' : field.text)).trim();
                 return text ? [{ box: field.box, text, manual: field.manual || text !== field.text }] : [];
             });
             const result = await positionedWordPage(canvas, page.viewport, page.number, fields);
