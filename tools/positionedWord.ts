@@ -9,7 +9,7 @@ import { wordImageSection } from './pdfToWordLayout';
 import { canvasToBlob, clearCanvas, renderPdfPage, withPdf } from './pdfRuntime';
 import { scanGrid } from './wordScanGrid';
 
-type PositionedText = { box: Bbox; text: string };
+type PositionedText = { box: Bbox; text: string; manual?: boolean };
 type Offset = { x: number; y: number };
 const arabic = /[\u0600-\u08ff]/;
 export type PositionedWordDraft = {
@@ -17,6 +17,8 @@ export type PositionedWordDraft = {
         viewport: { width: number; height: number };
         number: number;
         image: Blob;
+        width: number;
+        height: number;
         fields: (PositionedText & { id: number; preview: string })[];
     }[];
 };
@@ -60,7 +62,7 @@ function removePrintedText(canvas: HTMLCanvasElement, lines: PositionedText[]) {
             if (neutralInk(source, index)) printed++;
             else if (Math.max(source[index], source[index + 1], source[index + 2]) < 187) colored++;
         }
-        if (printed < area.width * area.height * 0.02 || colored > printed * 0.35) continue;
+        if (!item.manual && (printed < area.width * area.height * 0.02 || colored > printed * 0.35)) continue;
         const dividers = new Uint8Array(area.width);
         for (let x = 0; x < area.width; x++) {
             let dark = 0;
@@ -156,7 +158,7 @@ export async function exportPositionedWord(draft: PositionedWordDraft, reviewed:
             ctx.drawImage(bitmap, 0, 0);
             const fields = page.fields.flatMap(field => {
                 const text = (reviewed[field.id] ?? field.text).trim();
-                return text ? [{ box: field.box, text }] : [];
+                return text ? [{ box: field.box, text, manual: field.manual }] : [];
             });
             const result = await positionedWordPage(canvas, page.viewport, page.number, fields);
             sections.push(result.section);
@@ -215,7 +217,10 @@ export function preparePositionedWord(
                         crop.getContext('2d')?.drawImage(canvas, x0 - 4, y0 - 4, width, height, 0, 0, crop.width, crop.height);
                         return { ...line, id: id++, preview: crop.toDataURL('image/jpeg', 0.82) };
                     });
-                    draft.pages.push({ viewport: page.getViewport({ scale: 1 }), number, image: await canvasToBlob(canvas), fields });
+                    draft.pages.push({
+                        viewport: page.getViewport({ scale: 1 }), number, image: await canvasToBlob(canvas),
+                        width: canvas.width, height: canvas.height, fields,
+                    });
                 } finally {
                     clearCanvas(crop);
                     clearCanvas(canvas);

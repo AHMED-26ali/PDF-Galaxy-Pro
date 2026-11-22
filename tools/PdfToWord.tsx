@@ -8,6 +8,7 @@ import { OcrStartupError, readDocumentText } from './ocrRuntime';
 import { downloadFile as download, pdfError } from './pdfRuntime';
 import { convertPdfLayoutToWord } from './pdfToWordLayout';
 import type { PositionedWordDraft } from './positionedWord';
+import WordFieldPicker from './WordFieldPicker';
 
 const wordMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const ocrSetupMessages: Partial<Record<string, string>> = {
@@ -16,6 +17,14 @@ const ocrSetupMessages: Partial<Record<string, string>> = {
     'loading language traineddata': 'جاري تحميل ملفات اللغة العربية والإنجليزية…',
     'initializing api': 'جاري تجهيز التعرّف على النص…',
 };
+type DraftField = PositionedWordDraft['pages'][number]['fields'][number];
+
+function sameRegion(a: DraftField['box'], b: DraftField['box']) {
+    const w = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+    const h = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+    const smaller = Math.min((a.x1 - a.x0) * (a.y1 - a.y0), (b.x1 - b.x0) * (b.y1 - b.y0));
+    return smaller > 0 && w * h >= smaller * 0.78;
+}
 const PdfToWord: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -29,6 +38,7 @@ const PdfToWord: React.FC = () => {
     const [editableBoxes, setEditableBoxes] = useState(0);
     const [draft, setDraft] = useState<PositionedWordDraft | null>(null);
     const [reviewed, setReviewed] = useState<Record<number, string>>({});
+    const [showFieldPicker, setShowFieldPicker] = useState(false);
     const [mode, setMode] = useState<'layout' | 'text' | 'positioned'>('layout');
 
     const resetState = () => {
@@ -44,6 +54,7 @@ const PdfToWord: React.FC = () => {
         setEditableBoxes(0);
         setDraft(null);
         setReviewed({});
+        setShowFieldPicker(false);
         setMode('layout');
     };
 
@@ -79,6 +90,7 @@ const PdfToWord: React.FC = () => {
                 const { preparePositionedWord } = await import('./positionedWord');
                 setDraft(await preparePositionedWord(file, setStatus, updateOcrProgress));
                 setReviewed({});
+                setShowFieldPicker(false);
                 return;
             }
             const pages = await readDocumentText(file, useOcrFallback, setStatus, updateOcrProgress);
@@ -119,6 +131,19 @@ const PdfToWord: React.FC = () => {
         }
     };
 
+    const addField = (pageNumber: number, field: Omit<DraftField, 'id'>) => {
+        setDraft(previous => {
+            if (!previous) return previous;
+            const id = 1 + previous.pages.flatMap(page => page.fields).reduce((max, field) => Math.max(max, field.id), -1);
+            return {
+                pages: previous.pages.map(page => page.number !== pageNumber ? page : {
+                    ...page,
+                    fields: [...page.fields.filter(old => !sameRegion(old.box, field.box)), { ...field, id }],
+                }),
+            };
+        });
+    };
+
     const downloadPositioned = async () => {
         if (!file || !draft) return;
         setIsLoading(true);
@@ -132,6 +157,7 @@ const PdfToWord: React.FC = () => {
             setDocxBlob(blob);
             setDraft(null);
             setReviewed({});
+            setShowFieldPicker(false);
             download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', wordMime);
         } catch {
             setError('تعذّر تجهيز ملف Word. جرّب التنزيل مرة أخرى.');
@@ -179,8 +205,13 @@ const PdfToWord: React.FC = () => {
                 <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4 sm:p-6">
                     <h3 className="text-lg font-black text-slate-900">راجع النص قبل التنزيل</h3>
                     <p className="text-sm text-slate-600">{hasFields
-                        ? 'طابق السطر المستخرج مع صورته، وصحّح أي خطأ. اترك الحقل فارغًا للاحتفاظ بكتابته الأصلية كصورة.'
-                        : 'تعذّر العثور على سطور يمكن تعديلها. ستحصل على الصفحات بألوانها وتفاصيلها الأصلية.'}</p>
+                        ? 'طابق السطر المستخرج مع صورته، وصحّح أي خطأ. للنص الذي لم يظهر هنا، أضف حقلًا من مكانه في الصفحة.'
+                        : 'يمكنك تحديد السطور المطبوعة بنفسك وإضافتها كحقول قابلة للتعديل في Word.'}</p>
+                    <button type="button" aria-expanded={showFieldPicker} onClick={() => setShowFieldPicker(!showFieldPicker)}
+                        className="rounded-xl border border-blue-200 px-4 py-2 text-sm font-bold text-blue-800">
+                        {showFieldPicker ? 'إخفاء معاينة الصفحة' : 'إضافة نص من مكانه في الصفحة'}
+                    </button>
+                    {showFieldPicker && <WordFieldPicker pages={draft.pages} onAdd={addField} />}
                     <div className="max-h-[54vh] space-y-4 overflow-y-auto">
                         {draft.pages.filter(page => page.fields.length > 0).map(page => (
                             <div className="space-y-2" key={page.number}>
@@ -198,7 +229,7 @@ const PdfToWord: React.FC = () => {
                     </div>
                     <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={downloadPositioned} className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800">تنزيل ملف Word</button>
-                        <button type="button" onClick={() => { setDraft(null); setReviewed({}); setError(null); }} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">تغيير طريقة التحويل</button>
+                        <button type="button" onClick={() => { setDraft(null); setReviewed({}); setShowFieldPicker(false); setError(null); }} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">تغيير طريقة التحويل</button>
                     </div>
                 </div>
             );
