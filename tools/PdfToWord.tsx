@@ -205,7 +205,7 @@ const PdfToWord: React.FC = () => {
                 <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4 sm:p-6">
                     <h3 className="text-lg font-black text-slate-900">راجع النص قبل التنزيل</h3>
                     <p className="text-sm text-slate-600">{hasFields
-                        ? 'طابق السطر المستخرج مع صورته، وصحّح أي خطأ. للنص الذي لم يظهر هنا، أضف حقلًا من مكانه في الصفحة.'
+                        ? 'تمت قراءة الصفحة كاملة. راجع السطور المعلّمة، واترك الحقل فارغًا إذا أردت الاحتفاظ بصورته الأصلية.'
                         : 'يمكنك تحديد السطور المطبوعة بنفسك وإضافتها كحقول قابلة للتعديل في Word.'}</p>
                     <button type="button" aria-expanded={showFieldPicker} onClick={() => setShowFieldPicker(!showFieldPicker)}
                         className="rounded-xl border border-blue-200 px-4 py-2 text-sm font-bold text-blue-800">
@@ -219,9 +219,13 @@ const PdfToWord: React.FC = () => {
                                 {page.fields.map((field, index) => (
                                     <div key={field.id} className="grid items-center gap-2 rounded-xl border border-slate-200 p-2 sm:grid-cols-2">
                                         <img src={field.preview} alt={`السطر الأصلي ${index + 1}`} className="h-auto max-h-20 max-w-full object-contain" />
-                                        <input dir="auto" type="text" aria-label={`النص المستخرج ${index + 1}`} value={reviewed[field.id] ?? field.text}
-                                            onChange={event => { const value = event.currentTarget.value; setReviewed(prev => ({ ...prev, [field.id]: value })); }}
-                                            className="min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                                        <div className="min-w-0 space-y-1">
+                                            {field.confidence !== undefined && field.confidence < 72 && reviewed[field.id] === undefined &&
+                                                <p className="text-xs font-medium text-amber-800">راجع قراءة هذا السطر</p>}
+                                            <input dir="auto" type="text" aria-label={`النص المستخرج ${index + 1}`} value={reviewed[field.id] ?? field.text}
+                                                onChange={event => { const value = event.currentTarget.value; setReviewed(prev => ({ ...prev, [field.id]: value })); }}
+                                                className="w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                                        </div>
                                     </div>
                                 ))}
                             </div>
