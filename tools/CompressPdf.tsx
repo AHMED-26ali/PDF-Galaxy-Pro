@@ -13,6 +13,12 @@ type BatchResult = {
     source: File;
 } & (Awaited<ReturnType<typeof compressDocument>> | { kind: 'failed'; message: string });
 
+const compressionLabels: Record<CompressionLevel, string> = {
+    low: 'خفيف (أعلى جودة)',
+    medium: 'متوازن (موصى به)',
+    high: 'أقصى ضغط',
+};
+
 function downloadName(result: Extract<BatchResult, { file: Blob }>) {
     return result.kind === 'compressed' ? result.source.name.replace(/\.pdf$/i, '') + '_compressed.pdf' : result.source.name;
 }
@@ -258,11 +264,13 @@ const CompressPdf: React.FC = () => {
 
                     {/* Compression Level Selector */}
                     <div className="p-6 bg-slate-50/80 rounded-3xl border border-slate-200/90 max-w-lg mx-auto text-center space-y-3">
-                        <h4 className="text-sm font-bold text-slate-800">اختر مستوى الضغط لجميع الملفات:</h4>
-                        <div className="grid grid-cols-3 gap-2.5">
-                            {(['low', 'medium', 'high'] as CompressionLevel[]).map(level => (
+                        <h4 id="compression-level-label" className="text-sm font-bold text-slate-800">اختر مستوى الضغط لجميع الملفات</h4>
+                        <div role="group" aria-labelledby="compression-level-label" className="grid grid-cols-3 gap-2.5">
+                            {(Object.keys(compressionLabels) as CompressionLevel[]).map(level => (
                                 <button 
+                                    type="button"
                                     key={level} 
+                                    aria-pressed={compressionLevel === level}
                                     onClick={() => setCompressionLevel(level)} 
                                     className={`py-3 px-3 rounded-2xl font-bold text-xs sm:text-sm transition-all ${
                                         compressionLevel === level 
@@ -270,12 +278,17 @@ const CompressPdf: React.FC = () => {
                                             : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
                                     }`}
                                 >
-                                    {level === 'low' ? 'خفيف (أعلى جودة)' : level === 'medium' ? 'متوازن (موصى به)' : 'ضغط أعلى'}
+                                    {compressionLabels[level]}
                                 </button>
                             ))}
                         </div>
                         <p className="text-xs text-slate-600">
-                            يغيّر المستوى جودة صور JPEG داخل الملف. يبقى النص قابلًا للبحث، وتُحفظ النسخة الأصلية إذا لم يقل الحجم.
+                            {compressionLevel === 'high'
+                                ? 'يقلّل دقة الصور داخل الملف بدرجة أكبر. عاين وضوح الكتابة الصغيرة والأختام المصوّرة قبل التنزيل.'
+                                : compressionLevel === 'medium'
+                                    ? 'يقلّل حجم الصور داخل الملف مع الحفاظ على وضوحها. يمكنك مقارنة النتيجة بالأصل في المعاينة.'
+                                    : 'يحافظ على جودة أعلى لصور المستند.'}
+                            {' '}يبقى النص المضمّن قابلًا للبحث، وتُحفظ النسخة الأصلية إذا لم يقل الحجم.
                         </p>
                     </div>
 
@@ -303,6 +316,7 @@ const CompressPdf: React.FC = () => {
                     <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5">
                         <div role="status">
                             <h3 className="text-lg font-black text-slate-900">نتائج ضغط الملفات</h3>
+                            <p className="mt-1 text-xs text-slate-600">مستوى الضغط · {compressionLabels[compressionLevel]}</p>
                             <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-slate-700">
                                 {compressedCount > 0 && <span>تم ضغط {compressedCount}</span>}
                                 {keptCount > 0 && <span>النسخة الأصلية {keptCount}</span>}
