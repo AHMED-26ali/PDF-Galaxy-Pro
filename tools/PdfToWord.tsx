@@ -7,6 +7,7 @@ import { Document, Packer, Paragraph, TextRun, AlignmentType } from 'docx';
 import { OcrStartupError, readDocumentText } from './ocrRuntime';
 import { downloadFile as download, pdfError } from './pdfRuntime';
 import { convertPdfLayoutToWord } from './pdfToWordLayout';
+import type { PositionedWordDraft } from './positionedWord';
 
 const wordMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const ocrSetupMessages: Partial<Record<string, string>> = {
@@ -25,7 +26,10 @@ const PdfToWord: React.FC = () => {
     const [extractedText, setExtractedText] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
     const [docxBlob, setDocxBlob] = useState<Blob | null>(null);
-    const [mode, setMode] = useState<'layout' | 'text'>('layout');
+    const [editableBoxes, setEditableBoxes] = useState(0);
+    const [draft, setDraft] = useState<PositionedWordDraft | null>(null);
+    const [reviewed, setReviewed] = useState<Record<number, string>>({});
+    const [mode, setMode] = useState<'layout' | 'text' | 'positioned'>('layout');
 
     const resetState = () => {
         setFile(null);
@@ -37,6 +41,9 @@ const PdfToWord: React.FC = () => {
         setExtractedText(null);
         setCopied(false);
         setDocxBlob(null);
+        setEditableBoxes(0);
+        setDraft(null);
+        setReviewed({});
         setMode('layout');
     };
 
@@ -53,6 +60,11 @@ const PdfToWord: React.FC = () => {
         setError(null);
         setIsLoading(true);
         setStatus('جاري فتح الملف…');
+        const updateOcrProgress = (message: { status: string; progress: number }) => {
+            const setupStatus = ocrSetupMessages[message.status];
+            if (setupStatus) setStatus(setupStatus);
+            if (mode !== 'positioned' && message.status === 'recognizing text') setOcrProgress(Math.round(message.progress * 100));
+        };
         try {
             if (mode === 'layout') {
                 const blob = await convertPdfLayoutToWord(file, (page, count) => {
@@ -63,11 +75,13 @@ const PdfToWord: React.FC = () => {
                 download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', wordMime);
                 return;
             }
-            const pages = await readDocumentText(file, useOcrFallback, setStatus, message => {
-                const setupStatus = ocrSetupMessages[message.status];
-                if (setupStatus) setStatus(setupStatus);
-                if (message.status === 'recognizing text') setOcrProgress(Math.round(message.progress * 100));
-            });
+            if (mode === 'positioned') {
+                const { preparePositionedWord } = await import('./positionedWord');
+                setDraft(await preparePositionedWord(file, setStatus, updateOcrProgress));
+                setReviewed({});
+                return;
+            }
+            const pages = await readDocumentText(file, useOcrFallback, setStatus, updateOcrProgress);
             if (!pages) {
                 setNeedsOcr(true);
                 return;
@@ -105,6 +119,27 @@ const PdfToWord: React.FC = () => {
         }
     };
 
+    const downloadPositioned = async () => {
+        if (!file || !draft) return;
+        setIsLoading(true);
+        setError(null);
+        setStatus('جاري إنشاء ملف Word…');
+        try {
+            const { exportPositionedWord } = await import('./positionedWord');
+            const { blob, values } = await exportPositionedWord(draft, reviewed);
+            setEditableBoxes(values.length);
+            setExtractedText(values.join('\n'));
+            setDocxBlob(blob);
+            setDraft(null);
+            setReviewed({});
+            download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', wordMime);
+        } catch {
+            setError('تعذّر تجهيز ملف Word. جرّب التنزيل مرة أخرى.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const handleCopy = async () => {
         if (!extractedText) return;
         try {
@@ -134,6 +169,37 @@ const PdfToWord: React.FC = () => {
                             <p className="text-xs font-bold text-blue-600 mt-2 text-center">{ocrProgress}%</p>
                         </div>
                     )}
+                </div>
+            );
+        }
+
+        if (draft) {
+            const hasFields = draft.pages.some(page => page.fields.length > 0);
+            return (
+                <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4 sm:p-6">
+                    <h3 className="text-lg font-black text-slate-900">راجع النص قبل التنزيل</h3>
+                    <p className="text-sm text-slate-600">{hasFields
+                        ? 'طابق السطر المستخرج مع صورته، وصحّح أي خطأ. اترك الحقل فارغًا للاحتفاظ بكتابته الأصلية كصورة.'
+                        : 'تعذّر العثور على سطور يمكن تعديلها. ستحصل على الصفحات بألوانها وتفاصيلها الأصلية.'}</p>
+                    <div className="max-h-[54vh] space-y-4 overflow-y-auto">
+                        {draft.pages.filter(page => page.fields.length > 0).map(page => (
+                            <div className="space-y-2" key={page.number}>
+                                <h4 className="text-sm font-bold text-slate-700">صفحة {page.number}</h4>
+                                {page.fields.map((field, index) => (
+                                    <div key={field.id} className="grid items-center gap-2 rounded-xl border border-slate-200 p-2 sm:grid-cols-2">
+                                        <img src={field.preview} alt={`السطر الأصلي ${index + 1}`} className="h-auto max-h-20 max-w-full object-contain" />
+                                        <input dir="auto" type="text" aria-label={`النص المستخرج ${index + 1}`} value={reviewed[field.id] ?? field.text}
+                                            onChange={event => { const value = event.currentTarget.value; setReviewed(prev => ({ ...prev, [field.id]: value })); }}
+                                            className="min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                                    </div>
+                                ))}
+                            </div>
+                        ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={downloadPositioned} className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800">تنزيل ملف Word</button>
+                        <button type="button" onClick={() => { setDraft(null); setReviewed({}); setError(null); }} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">تغيير طريقة التحويل</button>
+                    </div>
                 </div>
             );
         }
@@ -173,6 +239,9 @@ const PdfToWord: React.FC = () => {
                             ملف <span className="font-bold text-slate-700">{file?.name}</span> جاهز بصيغة <span className="font-mono font-bold text-emerald-600">.docx</span>
                         </p>
                         {mode === 'layout' && <p className="mt-2 text-sm text-slate-600">تم إدراج كل صفحة كصورة عالية الدقة بنفس ترتيب الملف الأصلي.</p>}
+                        {mode === 'positioned' && <p className="mt-2 text-sm text-slate-600">{editableBoxes
+                            ? `تم إنشاء ${editableBoxes} حقلاً نصيًا قابلاً للتعديل في مواضعها. راجع النص في Word. الأختام والصور والسطور التي تعذّرت قراءتها تبقى ضمن صورة الصفحة.`
+                            : 'لم يتم العثور على سطور مقروءة بدقة كافية للتعديل. تم الاحتفاظ بشكل الصفحة.'}</p>}
                     </div>
 
                     <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
@@ -228,6 +297,13 @@ const PdfToWord: React.FC = () => {
                 </div>
                 <fieldset className="space-y-2 text-start">
                     <legend className="mb-2 text-sm font-bold text-slate-800">طريقة التحويل</legend>
+                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4 has-[:checked]:border-blue-400 has-[:checked]:bg-blue-50">
+                        <input type="radio" name="pdf-to-word-mode" checked={mode === 'positioned'} onChange={() => setMode('positioned')} className="mt-1 accent-blue-600" />
+                        <span>
+                            <span className="block text-sm font-bold text-slate-800">تعديل النص في مكانه</span>
+                            <span className="mt-1 block text-xs leading-relaxed text-slate-600">ينشئ حقول Word للسطور التي يتعرّف عليها. يحفظ صورة الصفحة وألوانها، وتبقى الأختام والكتابة التي يصعب قراءتها كصور.</span>
+                        </span>
+                    </label>
                     <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4 has-[:checked]:border-blue-400 has-[:checked]:bg-blue-50">
                         <input type="radio" name="pdf-to-word-mode" checked={mode === 'layout'} onChange={() => setMode('layout')} className="mt-1 accent-blue-600" />
                         <span>
