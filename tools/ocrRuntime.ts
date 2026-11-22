@@ -3,21 +3,50 @@ import { clearCanvas, readPageText, renderPdfPage, withPdf } from './pdfRuntime'
 
 type OcrLanguage = 'ara+eng' | 'ara' | 'eng';
 
-export async function createOcrWorker(language: OcrLanguage, logger: (message: LoggerMessage) => void) {
-    const [{ createWorker, OEM }, worker, core] = await Promise.all([
-        import('tesseract.js'),
-        import('tesseract.js/dist/worker.min.js?url'),
-        import('tesseract.js-core/tesseract-core-lstm.wasm.js?url'),
-    ]);
-    return createWorker(language, OEM.LSTM_ONLY, {
-        workerPath: new URL(worker.default, window.location.href).href,
-        corePath: new URL(core.default, window.location.href).href,
-        langPath: new URL('ocr-data/', document.baseURI).href,
-        workerBlobURL: false,
-        logger,
-    });
-}
+export class OcrStartupError extends Error {}
 
+export async function createOcrWorker(language: OcrLanguage, logger: (message: LoggerMessage) => void) {
+    let abandoned = false;
+    let timer: number | undefined;
+    let failStartup: (cause: unknown) => void = () => {};
+    const failed = new Promise<never>((_, reject) => {
+        failStartup = cause => reject(new OcrStartupError('تعذّر تحميل ملفات التعرّف الضوئي. جرّب مرة أخرى.', { cause }));
+        timer = window.setTimeout(() => {
+            reject(new OcrStartupError('استغرق تحميل التعرّف الضوئي وقتًا طويلًا. جرّب مرة أخرى.'));
+        }, 90_000);
+    });
+
+    const pending = (async () => {
+        const [{ createWorker, OEM }, worker, core] = await Promise.all([
+            import('tesseract.js'),
+            import('tesseract.js/dist/worker.min.js?url'),
+            import('tesseract.js-core/tesseract-core-lstm.wasm.js?url'),
+        ]);
+        if (abandoned) throw new Error('OCR startup expired before loading the worker');
+
+        const assetBase = new URL(import.meta.env.BASE_URL, window.location.origin);
+        return createWorker(language, OEM.LSTM_ONLY, {
+            workerPath: new URL(worker.default, assetBase).href,
+            corePath: new URL(core.default, assetBase).href,
+            langPath: new URL('ocr-data/', assetBase).href,
+            workerBlobURL: false,
+            logger: message => { if (!abandoned) logger(message); },
+            // Tesseract may report a language-load failure without rejecting its startup promise.
+            errorHandler: failStartup,
+        });
+    })();
+
+    try {
+        return await Promise.race([pending, failed]);
+    } catch (error) {
+        abandoned = true;
+        void pending.then(worker => worker.terminate()).catch(() => {});
+        if (error instanceof OcrStartupError) throw error;
+        throw new OcrStartupError('تعذّر تحميل ملفات التعرّف الضوئي. جرّب مرة أخرى.', { cause: error });
+    } finally {
+        window.clearTimeout(timer);
+    }
+}
 
 export function readDocumentText(
     file: File,
