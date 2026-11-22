@@ -85,7 +85,7 @@ export const tools: Tool[] = [
     {
         id: 'pdf-to-word',
         title: 'تحويل PDF إلى Word',
-        description: 'حوّل ملف PDF إلى مستند Word قابل للتعديل المباشر وبسرعة فائقة.',
+        description: 'حوّل PDF إلى Word مع الحفاظ على شكل الصفحات أو استخراج النص للتعديل.',
         icon: DocumentTextIcon,
         component: PdfToWord,
         category: 'convert',

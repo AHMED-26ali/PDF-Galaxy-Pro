@@ -6,7 +6,9 @@ import { Document, Packer, Paragraph, TextRun, AlignmentType } from 'docx';
 
 import { readDocumentText } from './ocrRuntime';
 import { downloadFile as download, pdfError } from './pdfRuntime';
+import { convertPdfLayoutToWord } from './pdfToWordLayout';
 
+const wordMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const PdfToWord: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -17,6 +19,7 @@ const PdfToWord: React.FC = () => {
     const [extractedText, setExtractedText] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
     const [docxBlob, setDocxBlob] = useState<Blob | null>(null);
+    const [mode, setMode] = useState<'layout' | 'text'>('layout');
 
     const resetState = () => {
         setFile(null);
@@ -28,6 +31,7 @@ const PdfToWord: React.FC = () => {
         setExtractedText(null);
         setCopied(false);
         setDocxBlob(null);
+        setMode('layout');
     };
 
     const onFilesSelected = useCallback((selectedFiles: File[]) => {
@@ -42,7 +46,17 @@ const PdfToWord: React.FC = () => {
         setNeedsOcr(false);
         setError(null);
         setIsLoading(true);
+        setStatus('جاري فتح الملف…');
         try {
+            if (mode === 'layout') {
+                const blob = await convertPdfLayoutToWord(file, (page, count) => {
+                    setStatus(`جاري تجهيز الصفحة ${page} من ${count}…`);
+                    setOcrProgress(Math.round(((page - 1) / count) * 100));
+                });
+                setDocxBlob(blob);
+                download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', wordMime);
+                return;
+            }
             const pages = await readDocumentText(file, useOcrFallback, setStatus, message => {
                 if (message.status === 'recognizing text') setOcrProgress(Math.round(message.progress * 100));
             });
@@ -68,7 +82,7 @@ const PdfToWord: React.FC = () => {
             const blob = await Packer.toBlob(new Document({ sections: [{ children: paragraphs }] }));
             setDocxBlob(blob);
             setExtractedText(pages.join('\n\n'));
-            download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            download(blob, file.name.replace(/\.pdf$/i, '') + '.docx', wordMime);
         } catch (error) {
             setError(pdfError(error, 'تعذّر تحويل الملف إلى Word. تأكد من سلامة ملف PDF.'));
         } finally {
@@ -92,7 +106,7 @@ const PdfToWord: React.FC = () => {
     const handleManualDownload = () => {
         if (!docxBlob || !file) return;
         const cleanName = file.name.replace(/\.pdf$/i, '') + '.docx';
-        download(docxBlob, cleanName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        download(docxBlob, cleanName, wordMime);
     };
 
     const renderContent = () => {
@@ -134,7 +148,7 @@ const PdfToWord: React.FC = () => {
             );
         }
 
-        if (docxBlob && extractedText) {
+        if (docxBlob) {
             return (
                 <div className="bg-white p-6 sm:p-8 rounded-3xl border border-emerald-200 shadow-sm max-w-2xl mx-auto text-center space-y-6 animate-fade-in">
                     <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-3xl flex items-center justify-center mx-auto text-3xl">
@@ -143,8 +157,9 @@ const PdfToWord: React.FC = () => {
                     <div>
                         <h3 className="text-2xl font-black text-slate-800">تم التحويل بنجاح إلى مستند Word!</h3>
                         <p className="text-slate-500 text-sm mt-1">
-                            ملف <span className="font-bold text-slate-700">{file?.name}</span> جاهز بصيغة <span className="font-mono font-bold text-emerald-600">.docx</span> الأصلية
+                            ملف <span className="font-bold text-slate-700">{file?.name}</span> جاهز بصيغة <span className="font-mono font-bold text-emerald-600">.docx</span>
                         </p>
+                        {mode === 'layout' && <p className="mt-2 text-sm text-slate-600">تم إدراج كل صفحة كصورة عالية الدقة بنفس ترتيب الملف الأصلي.</p>}
                     </div>
 
                     <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
@@ -155,12 +170,19 @@ const PdfToWord: React.FC = () => {
                             <ArrowDownTrayIcon className="w-5 h-5" />
                             تحميل ملف Word (.docx)
                         </button>
-                        <button
+                        {extractedText && <button
                             onClick={handleCopy}
                             className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 px-6 rounded-2xl transition-colors text-sm flex items-center gap-2 border border-slate-200"
                         >
                             {copied ? <CheckIcon className="w-5 h-5 text-emerald-600" /> : <ClipboardIcon className="w-5 h-5" />}
                             {copied ? 'تم النسخ!' : 'نسخ النص'}
+                        </button>}
+                        <button
+                            type="button"
+                            onClick={() => { setDocxBlob(null); setExtractedText(null); setCopied(false); setError(null); }}
+                            className="rounded-2xl border border-slate-200 px-5 py-3.5 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                        >
+                            تغيير طريقة التحويل
                         </button>
                         <button
                             onClick={resetState}
@@ -171,13 +193,13 @@ const PdfToWord: React.FC = () => {
                     </div>
 
                     {/* Extracted text preview */}
-                    <div className="text-right pt-4 border-t border-slate-100">
+                    {extractedText && <div className="text-right pt-4 border-t border-slate-100">
                         <p className="text-xs font-bold text-slate-500 mb-2">معاينة النص المستخرج:</p>
                         <div className="max-h-48 overflow-y-auto bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs text-slate-700 leading-relaxed font-sans whitespace-pre-wrap select-all">
                             {extractedText.slice(0, 1000)}
                             {extractedText.length > 1000 ? '...' : ''}
                         </div>
-                    </div>
+                    </div>}
                 </div>
             );
         }
@@ -191,10 +213,24 @@ const PdfToWord: React.FC = () => {
                     <h3 className="text-xl font-black text-slate-800">الملف جاهز للتحويل</h3>
                     <p className="text-slate-500 text-sm mt-1 font-mono">{file?.name}</p>
                 </div>
-                <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 text-xs text-slate-600 leading-relaxed">
-                    ✨ سيتم إنشاء ملف Word رسمي بصيغة <span className="font-bold text-blue-700">.docx</span> يدعم اللغة العربية واتجاه اليمين لليسار، قابل للتعديل الفوري في كافة إصدارات Microsoft Word و Google Docs.
-                </div>
-                <div className="pt-2 flex justify-center gap-3">
+                <fieldset className="space-y-2 text-start">
+                    <legend className="mb-2 text-sm font-bold text-slate-800">طريقة التحويل</legend>
+                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4 has-[:checked]:border-blue-400 has-[:checked]:bg-blue-50">
+                        <input type="radio" name="pdf-to-word-mode" checked={mode === 'layout'} onChange={() => setMode('layout')} className="mt-1 accent-blue-600" />
+                        <span>
+                            <span className="block text-sm font-bold text-slate-800">الحفاظ على شكل الصفحة</span>
+                            <span className="mt-1 block text-xs leading-relaxed text-slate-600">تظهر الجداول والصور والأختام في مكانها. تُدرج كل صفحة كصورة عالية الدقة، ويظل النص جزءًا من الصورة.</span>
+                        </span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4 has-[:checked]:border-blue-400 has-[:checked]:bg-blue-50">
+                        <input type="radio" name="pdf-to-word-mode" checked={mode === 'text'} onChange={() => setMode('text')} className="mt-1 accent-blue-600" />
+                        <span>
+                            <span className="block text-sm font-bold text-slate-800">استخراج نص قابل للتعديل</span>
+                            <span className="mt-1 block text-xs leading-relaxed text-slate-600">يُحوّل النص إلى فقرات Word، مع إمكانية التعرف الضوئي على الملفات الممسوحة.</span>
+                        </span>
+                    </label>
+                </fieldset>
+                <div className="flex flex-wrap justify-center gap-3 pt-2">
                     <button
                         onClick={resetState}
                         className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 px-6 rounded-2xl text-sm transition-colors"

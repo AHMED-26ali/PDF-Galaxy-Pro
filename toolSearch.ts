@@ -14,7 +14,7 @@ export const toolSearchPages: Record<string, ToolSearchPage> = {
     },
     compress: {
         title: 'ضغط PDF وتقليل حجم الملف أونلاين',
-        description: 'جرّب ثلاثة مستويات لضغط PDF، وقارن حجم الناتج بالأصل. عالج عدة مستندات ونزّل كل ملف منفردًا أو احفظ النتائج في ZIP.',
+        description: 'اضغط عدة ملفات PDF مع إبقاء النص قابلًا للبحث. عاين الصفحات وقارن الأحجام، ونزّل الملفات منفردة أو في ZIP.',
     },
     rotate: {
         title: 'تدوير صفحات PDF وتصحيح اتجاهها',
@@ -33,8 +33,8 @@ export const toolSearchPages: Record<string, ToolSearchPage> = {
         description: 'اختر نطاق الصفحات والدقة، ثم نزّل الصور الناتجة منفردة أو مجمّعة في ZIP أو في صورة واحدة.',
     },
     'pdf-to-word': {
-        title: 'تحويل PDF إلى Word قابل للتعديل',
-        description: 'استخرج نص PDF إلى مستند DOCX قابل للتحرير. يتوفر التعرف الضوئي عند تحويل مستند ممسوح ضوئيًا.',
+        title: 'تحويل PDF إلى Word مع الحفاظ على التنسيق',
+        description: 'حوّل صفحات PDF إلى DOCX مع الحفاظ على شكل الجداول والصور، أو استخرج النص القابل للتحرير مع دعم التعرف الضوئي.',
     },
     'add-page-numbers': {
         title: 'ترقيم صفحات PDF وتحديد رقم البداية',
