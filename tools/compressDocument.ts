@@ -163,10 +163,10 @@ async function recompressImage(stream: PDFRawStream, profile: typeof profiles.me
 
 
 /**
- * Some phone scanners use indexed, CMYK, JPEG2000 or other embedded image encodings
- * that the selective image optimizer cannot safely rewrite. A scan-only fallback
- * can re-encode the visible page as JPEG without changing its physical page size.
- * Never flatten a searchable PDF, digitally signed document, or a form.
+ * Some phone scans contain image formats that cannot be safely recompressed as
+ * independent XObjects. Re-encode the visible pages only for image-heavy PDFs.
+ * This intentionally uses lossy JPEG and may flatten an OCR text layer; callers
+ * must label this result. Never rasterize signed documents, forms or annotations.
  */
 async function compressScannedPages(
     sourceBytes: Uint8Array,
@@ -186,34 +186,20 @@ async function compressScannedPages(
 
     try {
         if (pdf.numPages !== pages.length) return;
-        const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-        const imageOps = new Set([
-            pdfjs.OPS.paintImageXObject,
-            pdfjs.OPS.paintImageXObjectRepeat,
-            pdfjs.OPS.paintInlineImageXObject,
-            pdfjs.OPS.paintInlineImageXObjectGroup,
-            pdfjs.OPS.paintJpegXObject,
-        ].filter((code): code is number => typeof code === 'number'));
-
-        // Check *all* pages before rebuilding anything. Preserve native text,
-        // annotations, custom page boxes and atypical user units unchanged.
+        // Eligibility: image-heavy source (checked by caller), standard page boxes,
+        // and no interactive annotations. A hidden OCR layer is common on scans;
+        // it must not silently disable all compression for those documents.
         for (let number = 1; number <= pdf.numPages; number++) {
             const sourcePage = pages[number - 1];
             const media = sourcePage.getMediaBox();
             const crop = sourcePage.getCropBox();
-            if (media.x !== 0 || media.y !== 0 || crop.x !== 0 || crop.y !== 0 ||
+            if (Math.abs(media.x) > 0.01 || Math.abs(media.y) > 0.01 ||
+                Math.abs(crop.x) > 0.01 || Math.abs(crop.y) > 0.01 ||
                 Math.abs(media.width - crop.width) > 0.01 ||
                 Math.abs(media.height - crop.height) > 0.01) return;
             const page = await pdf.getPage(number);
             if (page.userUnit !== 1) return;
-            const [text, annotations, operators] = await Promise.all([
-                page.getTextContent(),
-                page.getAnnotations({ intent: 'display' }),
-                page.getOperatorList(),
-            ]);
-            if (annotations.length > 0 ||
-                text.items.some(item => 'str' in item && item.str.trim() !== '') ||
-                !operators.fnArray.some(code => imageOps.has(code))) return;
+            if ((await page.getAnnotations({ intent: 'display' })).length > 0) return;
         }
 
         const output = await PDFDocument.create();
@@ -310,18 +296,31 @@ export async function compressDocument(input: File, level: CompressionLevel, onP
 
     // Scan-only fallback also works for image encodings the selective optimizer
     // does not support. Choose the smaller valid result, never a larger PDF.
-    const scanned = await compressScannedPages(
-        new Uint8Array(await input.arrayBuffer()),
-        await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false }),
-        level,
-        onProgress,
-    );
-    if (scanned && scanned.byteLength < (best?.byteLength ?? input.size)) best = scanned;
+    // Only image-dominant PDFs qualify for page flattening. OCR-scanned files
+    // often contain a hidden selectable text layer but are still photo scans.
+    const rasterWeight = images.reduce((sum, [, stream]) => sum + stream.contents.length, 0);
+    let rasterized = false;
+    // For image-dominant scans, prefer the smaller page render. Also allow
+    // fallback when the native optimizer produces no reduction at all, matching
+    // the original page-to-image compression behavior of PDFix.
+    if (input.size >= 100 * 1024 && (rasterWeight >= input.size * 0.22 || !best)) {
+        const scanned = await compressScannedPages(
+            new Uint8Array(await input.arrayBuffer()),
+            await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false }),
+            level,
+            onProgress,
+        );
+        if (scanned && scanned.byteLength < (best?.byteLength ?? input.size)) {
+            best = scanned;
+            rasterized = true;
+        }
+    }
     if (!best) return { file: input, pages, kind: 'original' as const };
     return {
         file: new Blob([new Uint8Array(best)], { type: 'application/pdf' }),
         pages,
         kind: 'compressed' as const,
+        rasterized,
     };
 }
 

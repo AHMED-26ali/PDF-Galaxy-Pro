@@ -345,7 +345,10 @@ const CompressPdf: React.FC = () => {
                                                 <span>قبل <b dir="ltr">{formatBytes(result.source.size)}</b></span>
                                                 <span>بعد <b dir="ltr">{formatBytes(result.file.size)}</b></span>
                                                 {result.kind === 'compressed' ? (
-                                                    <span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-800">توفير <b dir="ltr">{new Intl.NumberFormat('ar', { style: 'percent', maximumFractionDigits: 2 }).format((result.source.size - result.file.size) / result.source.size)}</b></span>
+                                                    <>
+                                                        <span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-800">توفير <b dir="ltr">{new Intl.NumberFormat('ar', { style: 'percent', maximumFractionDigits: 2 }).format((result.source.size - result.file.size) / result.source.size)}</b></span>
+                                                        {result.rasterized && <span className="rounded-full bg-amber-50 px-2 py-1 font-bold text-amber-800">ضغط مصوّر: قد يفقد النص إمكانية البحث والنسخ</span>}
+                                                    </>
                                                 ) : (
                                                     <span className="rounded-full bg-slate-100 px-2 py-1 font-bold text-slate-700">
                                                         {result.kind === 'signed' ? 'ملف موقّع رقميًا · تم الاحتفاظ بالأصل' : 'الحجم لم يقل · تم الاحتفاظ بالأصل'}
