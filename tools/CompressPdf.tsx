@@ -1,22 +1,66 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import JSZip from 'jszip';
 import FileUploader from '../components/FileUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ArrowDownTrayIcon, PlusIcon, XMarkIcon } from '../components/icons';
 
-declare const PDFLib: any;
-declare const pdfjsLib: any;
-declare const JSZip: any;
-declare const download: any;
+import { compressDocument, compressionError, type CompressionLevel } from './compressDocument';
+import PdfPagePreview from './pdf-pages/PdfPagePreview';
+import { downloadFile } from './pdfRuntime';
 
-type CompressionLevel = 'low' | 'medium' | 'high';
+type BatchResult = {
+    id: number;
+    source: File;
+} & (Awaited<ReturnType<typeof compressDocument>> | { kind: 'failed'; message: string });
 
-interface CompressedResult {
-    id: string;
-    name: string;
-    originalSize: number;
-    newSize: number;
-    newFile: Uint8Array;
-    reductionPercentage: number;
+const compressionLabels: Record<CompressionLevel, string> = {
+    low: 'خفيف (أعلى جودة)',
+    medium: 'متوازن (موصى به)',
+    high: 'أقصى ضغط',
+};
+
+function downloadName(result: Extract<BatchResult, { file: Blob }>) {
+    return result.kind === 'compressed' ? result.source.name.replace(/\.pdf$/i, '') + '_compressed.pdf' : result.source.name;
+}
+
+function CompressionPreview({ source, file, pages }: { source: File; file: Blob; pages: number }) {
+    const [page, setPage] = useState(1);
+    const [preview, setPreview] = useState<{ source: Uint8Array; output?: Uint8Array } | null>(null);
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => {
+        let active = true;
+        Promise.all([source.arrayBuffer(), file === source ? null : file.arrayBuffer()])
+            .then(([before, after]) => {
+                if (active) setPreview({ source: new Uint8Array(before), output: after ? new Uint8Array(after) : undefined });
+            })
+            .catch(() => { if (active) setFailed(true); });
+        return () => { active = false; };
+    }, [source, file]);
+
+    return (
+        <div className="space-y-3 border-t border-slate-200 pt-4">
+            <div className="flex items-center justify-center gap-3 text-sm">
+                <button type="button" onClick={() => setPage(page - 1)} disabled={page === 1} className="rounded-lg border border-slate-200 px-3 py-1 disabled:opacity-40">السابقة</button>
+                <span>صفحة {page} من {pages}</span>
+                <button type="button" onClick={() => setPage(page + 1)} disabled={page === pages} className="rounded-lg border border-slate-200 px-3 py-1 disabled:opacity-40">التالية</button>
+            </div>
+            {failed ? <p role="status" className="text-center text-sm text-slate-600">تعذّر فتح المعاينة.</p> : preview ? (
+                <div className={preview.output ? 'grid gap-3 sm:grid-cols-2' : ''}>
+                    <div>
+                        <p className="mb-2 text-center text-sm font-bold text-slate-700">الأصل</p>
+                        <PdfPagePreview bytes={preview.source} pageNumber={page} />
+                    </div>
+                    {preview.output && (
+                        <div>
+                            <p className="mb-2 text-center text-sm font-bold text-slate-700">بعد الضغط</p>
+                            <PdfPagePreview bytes={preview.output} pageNumber={page} />
+                        </div>
+                    )}
+                </div>
+            ) : <p role="status" className="py-4 text-center text-sm text-slate-600">جاري تجهيز المعاينة…</p>}
+        </div>
+    );
 }
 
 const formatBytes = (bytes: number): string => {
@@ -34,172 +78,100 @@ const CompressPdf: React.FC = () => {
     const [progressPercent, setProgressPercent] = useState<number>(0);
     const [error, setError] = useState<string | null>(null);
     const [compressionLevel, setCompressionLevel] = useState<CompressionLevel>('medium');
-    const [results, setResults] = useState<CompressedResult[]>([]);
-    const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
+    const [results, setResults] = useState<BatchResult[]>([]);
+    const [downloadedIds, setDownloadedIds] = useState<Set<number>>(new Set());
     const [isZipping, setIsZipping] = useState(false);
+    const [previewId, setPreviewId] = useState<number | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const onFilesSelected = useCallback((selectedFiles: File[]) => {
-        if (selectedFiles.length > 0) {
-            setFiles(prev => {
-                const existingNames = new Set(prev.map(f => f.name));
-                const newUnique = selectedFiles.filter(f => !existingNames.has(f.name));
-                return [...prev, ...newUnique];
-            });
-            setError(null);
-            setResults([]);
-        }
-    }, []);
+    const onFilesSelected = (selectedFiles: File[]) => {
+        if (selectedFiles.length === 0) return;
+        setFiles(prev => [...prev, ...selectedFiles]);
+        setError(null);
+        setResults([]);
+    };
 
     const handleRemoveFile = (indexToRemove: number) => {
         setFiles(prev => prev.filter((_, idx) => idx !== indexToRemove));
     };
 
     const handleAddMoreFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const addedFiles = Array.from(e.target.files || []);
-        if (addedFiles.length > 0) {
-            onFilesSelected(addedFiles);
-        }
-        e.target.value = '';
-    };
-
-    const compressSinglePdf = async (
-        file: File, 
-        level: CompressionLevel,
-        onPageProgress: (page: number, total: number) => void
-    ): Promise<Uint8Array> => {
-        const qualityMap = {
-            low: 0.92,
-            medium: 0.75,
-            high: 0.5,
-        };
-        const scale = 1.5;
-        const jpegQuality = qualityMap[level];
-
-        const { PDFDocument } = PDFLib;
-        const newPdfDoc = await PDFDocument.create();
-        
-        const arrayBuffer = await file.arrayBuffer();
-        const pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const numPages = pdfDoc.numPages;
-
-        for (let i = 1; i <= numPages; i++) {
-            onPageProgress(i, numPages);
-            const page = await pdfDoc.getPage(i);
-            const viewport = page.getViewport({ scale });
-            const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
-            
-            if (!context) {
-                throw new Error(`تعذر معالجة الصفحة ${i}`);
-            }
-
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-            
-            await page.render({ canvasContext: context, viewport }).promise;
-
-            const imageDataUrl = canvas.toDataURL('image/jpeg', jpegQuality);
-            const imageBytes = await fetch(imageDataUrl).then(res => res.arrayBuffer());
-            const image = await newPdfDoc.embedJpg(imageBytes);
-
-            const newPage = newPdfDoc.addPage([viewport.width / scale, viewport.height / scale]);
-            newPage.drawImage(image, {
-                x: 0,
-                y: 0,
-                width: newPage.getWidth(),
-                height: newPage.getHeight(),
-            });
-        }
-
-        return await newPdfDoc.save();
+        const input: HTMLInputElement = e.currentTarget;
+        onFilesSelected(Array.from(input.files ?? []));
+        input.value = '';
     };
 
     const handleBatchCompression = async () => {
-        if (files.length === 0) return;
-        
+        if (files.length === 0 || isLoading) return;
         setIsLoading(true);
         setError(null);
         setResults([]);
+        setPreviewId(null);
         setDownloadedIds(new Set());
         setProgressPercent(0);
 
-        const newResults: CompressedResult[] = [];
-        const totalFiles = files.length;
-
+        const newResults: BatchResult[] = [];
         try {
-            for (let fIdx = 0; fIdx < totalFiles; fIdx++) {
-                const currentFile = files[fIdx];
-                setProgressStatus(`جاري ضغط الملف (${fIdx + 1} من ${totalFiles}): ${currentFile.name}...`);
-
-                const pdfBytes = await compressSinglePdf(
-                    currentFile, 
-                    compressionLevel,
-                    (page, numPages) => {
-                        const fileBasePercent = (fIdx / totalFiles) * 100;
-                        const fileProgress = (page / numPages) * (100 / totalFiles);
-                        setProgressPercent(Math.round(fileBasePercent + fileProgress));
-                        setProgressStatus(`جاري ضغط (${fIdx + 1}/${totalFiles}) ${currentFile.name}: صفحة ${page} من ${numPages}`);
-                    }
-                );
-
-                const reduction = Math.max(0, (((currentFile.size - pdfBytes.length) / currentFile.size) * 100));
-
-                newResults.push({
-                    id: `${currentFile.name}-${Date.now()}-${fIdx}`,
-                    name: currentFile.name,
-                    originalSize: currentFile.size,
-                    newSize: pdfBytes.length,
-                    newFile: pdfBytes,
-                    reductionPercentage: parseFloat(reduction.toFixed(1)),
-                });
+            for (const [index, file] of files.entries()) {
+                setProgressStatus(`جاري معالجة الملف (${index + 1} من ${files.length}): ${file.name}`);
+                const onProgress = (fraction: number) => {
+                    setProgressPercent(Math.round(((index + fraction) / files.length) * 100));
+                };
+                try {
+                    const result = await compressDocument(file, compressionLevel, onProgress);
+                    newResults.push({ id: index, source: file, ...result });
+                } catch (error) {
+                    newResults.push({ id: index, source: file, kind: 'failed', message: compressionError(error) });
+                }
+                onProgress(1);
             }
-
-            setProgressPercent(100);
             setResults(newResults);
-        } catch (e: any) {
-            console.error(e);
-            setError("حدث خطأ أثناء ضغط بعض الملفات. يرجى التأكد من أن الملفات غير تالفة أو محمية بكلمة سر.");
-            if (newResults.length > 0) {
-                setResults(newResults);
-            }
         } finally {
             setIsLoading(false);
             setProgressStatus('');
         }
     };
 
-    const handleDownloadIndividual = (item: CompressedResult) => {
-        const cleanName = item.name.replace(/\.pdf$/i, '');
-        download(item.newFile, `${cleanName}_compressed.pdf`, "application/pdf");
-        setDownloadedIds(prev => new Set(prev).add(item.id));
+    const available = results.filter(result => result.kind !== 'failed');
+    const compressedCount = available.filter(result => result.kind === 'compressed').length;
+    const keptCount = available.length - compressedCount;
+    const failedCount = results.length - available.length;
+    const totalOriginal = available.reduce((total, result) => total + result.source.size, 0);
+    const totalOutput = available.reduce((total, result) => total + result.file.size, 0);
+    const totalSaved = totalOriginal - totalOutput;
+
+    const handleDownloadIndividual = (result: (typeof available)[number]) => {
+        downloadFile(result.file, downloadName(result), 'application/pdf');
+        setDownloadedIds(prev => new Set(prev).add(result.id));
     };
 
     const handleDownloadAllZip = async () => {
-        if (results.length === 0) return;
+        if (available.length === 0 || isZipping) return;
         setIsZipping(true);
+        setError(null);
         try {
             const zip = new JSZip();
-            results.forEach(res => {
-                const cleanName = res.name.replace(/\.pdf$/i, '');
-                zip.file(`${cleanName}_compressed.pdf`, res.newFile);
-                setDownloadedIds(prev => new Set(prev).add(res.id));
-            });
-            const zipContent = await zip.generateAsync({ type: 'blob' });
-            download(zipContent, `جميع_الملفات_المضغوطة_${Date.now()}.zip`, 'application/zip');
-        } catch (err) {
-            console.error('Error creating zip:', err);
+            const usedNames = new Set<string>();
+            for (const result of available) {
+                const requested = downloadName(result).replace(/[\\/:*?"<>|]/g, '_');
+                const name = requested.replace(/\.pdf$/i, '');
+                let uniqueName = requested;
+                for (let suffix = 2; usedNames.has(uniqueName.toLowerCase()); suffix++) {
+                    uniqueName = `${name} (${suffix}).pdf`;
+                }
+                usedNames.add(uniqueName.toLowerCase());
+                zip.file(uniqueName, await result.file.arrayBuffer());
+            }
+            const content = await zip.generateAsync({ type: 'blob' });
+            downloadFile(content, 'ملفات_PDF.zip', 'application/zip');
+            setDownloadedIds(new Set(available.map(result => result.id)));
+        } catch {
+            setError('تعذّر تجهيز ملف ZIP. الملفات المتاحة قابلة للتنزيل منفردة.');
         } finally {
             setIsZipping(false);
         }
     };
-
-    const totalOriginal = results.reduce((acc, r) => acc + r.originalSize, 0);
-    const totalNew = results.reduce((acc, r) => acc + r.newSize, 0);
-    const totalReduction = totalOriginal > 0 
-        ? (((totalOriginal - totalNew) / totalOriginal) * 100).toFixed(1) 
-        : '0';
 
     return (
         <div className="space-y-8 animate-fade-in">
@@ -292,11 +264,13 @@ const CompressPdf: React.FC = () => {
 
                     {/* Compression Level Selector */}
                     <div className="p-6 bg-slate-50/80 rounded-3xl border border-slate-200/90 max-w-lg mx-auto text-center space-y-3">
-                        <h4 className="text-sm font-bold text-slate-800">اختر مستوى الضغط لجميع الملفات:</h4>
-                        <div className="grid grid-cols-3 gap-2.5">
-                            {(['low', 'medium', 'high'] as CompressionLevel[]).map(level => (
+                        <h4 id="compression-level-label" className="text-sm font-bold text-slate-800">اختر مستوى الضغط لجميع الملفات</h4>
+                        <div role="group" aria-labelledby="compression-level-label" className="grid grid-cols-3 gap-2.5">
+                            {(Object.keys(compressionLabels) as CompressionLevel[]).map(level => (
                                 <button 
+                                    type="button"
                                     key={level} 
+                                    aria-pressed={compressionLevel === level}
                                     onClick={() => setCompressionLevel(level)} 
                                     className={`py-3 px-3 rounded-2xl font-bold text-xs sm:text-sm transition-all ${
                                         compressionLevel === level 
@@ -304,14 +278,17 @@ const CompressPdf: React.FC = () => {
                                             : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
                                     }`}
                                 >
-                                    {level === 'low' ? 'خفيف (أعلى جودة)' : level === 'medium' ? 'متوازن (موصى به)' : 'أقصى ضغط'}
+                                    {compressionLabels[level]}
                                 </button>
                             ))}
                         </div>
-                        <p className="text-[11px] text-slate-500">
-                            {compressionLevel === 'low' && 'يحافظ على أعلى دقة للصور مع تقليل مناسب للحجم.'}
-                            {compressionLevel === 'medium' && 'توازن مثالي بين وضوح النصوص وتوفير كبير في الحجم.'}
-                            {compressionLevel === 'high' && 'أقصى تخفيض ممكن لحجم الملف، مناسب للمشاركة السريعة.'}
+                        <p className="text-xs text-slate-600">
+                            {compressionLevel === 'high'
+                                ? 'يقلّل دقة الصور داخل الملف بدرجة أكبر. عاين وضوح الكتابة الصغيرة والأختام المصوّرة قبل التنزيل.'
+                                : compressionLevel === 'medium'
+                                    ? 'يقلّل حجم الصور داخل الملف مع الحفاظ على وضوحها. يمكنك مقارنة النتيجة بالأصل في المعاينة.'
+                                    : 'يحافظ على جودة أعلى لصور المستند.'}
+                            {' '}يبقى النص المضمّن قابلًا للبحث، وتُحفظ النسخة الأصلية إذا لم يقل الحجم.
                         </p>
                     </div>
 
@@ -334,131 +311,72 @@ const CompressPdf: React.FC = () => {
                 </div>
             )}
 
-            {/* Results View: Individual Download per file */}
             {!isLoading && results.length > 0 && (
-                <div className="space-y-6 animate-fade-in">
-                    {/* Overall Success Summary */}
-                    <div className="p-6 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 rounded-3xl border border-emerald-200 flex flex-col md:flex-row items-center justify-between gap-6">
-                        <div className="flex items-center gap-4 text-right">
-                            <div className="w-14 h-14 rounded-2xl bg-emerald-500 text-white flex items-center justify-center text-3xl shadow-lg shadow-emerald-500/25 shrink-0">
-                                ✓
-                            </div>
-                            <div>
-                                <h3 className="text-xl font-black text-emerald-900">
-                                    تم ضغط {results.length} ملفات بنجاح!
-                                </h3>
-                                <p className="text-xs sm:text-sm text-emerald-800 font-medium mt-0.5">
-                                    يمكنك الآن تنزيل كل ملف بشكل مفرد ومستقل عبر الزر المخصص لكل ملف أدناه.
-                                </p>
-                            </div>
+                <div className="space-y-5 animate-fade-in">
+                    <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                        <div role="status">
+                            <h3 className="text-lg font-black text-slate-900">نتائج ضغط الملفات</h3>
+                            <p className="mt-1 text-xs text-slate-600">مستوى الضغط · {compressionLabels[compressionLevel]}</p>
+                            <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-slate-700">
+                                {compressedCount > 0 && <span>تم ضغط {compressedCount}</span>}
+                                {keptCount > 0 && <span>النسخة الأصلية {keptCount}</span>}
+                                {failedCount > 0 && <span className="text-red-700">تعذّر الضغط {failedCount}</span>}
+                                {available.length > 0 && <span>التوفير الإجمالي <b dir="ltr">{formatBytes(totalSaved)}</b></span>}
+                            </p>
                         </div>
-
-                        {/* Total Stats & Download All */}
-                        <div className="flex flex-wrap items-center gap-3">
-                            <div className="bg-white p-3 rounded-2xl border border-emerald-200 shadow-xs text-center min-w-[100px]">
-                                <span className="text-[10px] text-slate-500 block">الإجمالي السابق</span>
-                                <span className="text-sm font-bold font-mono text-slate-700">{formatBytes(totalOriginal)}</span>
-                            </div>
-                            <div className="bg-white p-3 rounded-2xl border border-emerald-200 shadow-xs text-center min-w-[100px]">
-                                <span className="text-[10px] text-emerald-600 block">الإجمالي الجديد</span>
-                                <span className="text-sm font-bold font-mono text-emerald-700">{formatBytes(totalNew)}</span>
-                            </div>
-                            <div className="bg-emerald-600 text-white p-3 rounded-2xl shadow-xs text-center min-w-[90px]">
-                                <span className="text-[10px] text-emerald-100 block">التوفير الإجمالي</span>
-                                <span className="text-sm font-black font-mono">%{totalReduction}</span>
-                            </div>
-                            
-                            <button
-                                onClick={handleDownloadAllZip}
-                                disabled={isZipping}
-                                className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs sm:text-sm shadow-md shadow-emerald-500/25 transition-all cursor-pointer disabled:opacity-60"
-                                title="تحميل كافة الملفات المضغوطة في ملف ZIP واحد"
-                            >
-                                <ArrowDownTrayIcon className="w-4 h-4" />
-                                <span>{isZipping ? 'جاري تجهيز ZIP...' : 'تحميل الكل (ZIP)'}</span>
+                        {available.length > 0 && (
+                            <button type="button" onClick={handleDownloadAllZip} disabled={isZipping} className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800 disabled:opacity-60">
+                                <ArrowDownTrayIcon className="h-4 w-4" />
+                                {isZipping ? 'جاري تجهيز ZIP…' : 'تحميل الكل (ZIP)'}
                             </button>
-                        </div>
+                        )}
                     </div>
 
-                    {/* Files List with Individual Download Buttons */}
                     <div className="space-y-3">
-                        <div className="flex items-center justify-between px-2">
-                            <h4 className="text-sm font-black text-slate-800">
-                                قائمة الملفات المضغوطة (التحميل المفرد):
-                            </h4>
-                            <span className="text-xs text-slate-500 font-medium">
-                                تم تنزيل {downloadedIds.size} من {results.length}
-                            </span>
-                        </div>
-
-                        {results.map((res, index) => {
-                            const isDownloaded = downloadedIds.has(res.id);
-                            return (
-                                <div 
-                                    key={res.id}
-                                    className="p-4 bg-white hover:bg-slate-50/70 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all"
-                                >
-                                    {/* File Info & Stats */}
-                                    <div className="flex items-center gap-3.5 overflow-hidden w-full sm:w-auto">
-                                        <div className="w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
-                                            #{index + 1}
-                                        </div>
-
-                                        <div className="overflow-hidden">
-                                            <p className="text-sm sm:text-base font-bold text-slate-900 truncate" title={res.name}>
-                                                {res.name}
-                                            </p>
-                                            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                                                <span>قبل: <b className="font-mono text-slate-700">{formatBytes(res.originalSize)}</b></span>
-                                                <span>·</span>
-                                                <span>بعد: <b className="font-mono text-emerald-700">{formatBytes(res.newSize)}</b></span>
-                                                <span>·</span>
-                                                <span className="font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full font-mono text-[11px]">
-                                                    توفير {res.reductionPercentage}%
-                                                </span>
+                        {results.map(result => (
+                            <div key={result.id} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <div className="min-w-0 space-y-1">
+                                        <p className="break-all text-sm font-bold text-slate-900" dir="auto">{result.source.name}</p>
+                                        {result.kind === 'failed' ? (
+                                            <p className="text-sm text-red-700">{result.message}</p>
+                                        ) : (
+                                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                                <span>قبل <b dir="ltr">{formatBytes(result.source.size)}</b></span>
+                                                <span>بعد <b dir="ltr">{formatBytes(result.file.size)}</b></span>
+                                                {result.kind === 'compressed' ? (
+                                                    <span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-800">توفير <b dir="ltr">{new Intl.NumberFormat('ar', { style: 'percent', maximumFractionDigits: 2 }).format((result.source.size - result.file.size) / result.source.size)}</b></span>
+                                                ) : (
+                                                    <span className="rounded-full bg-slate-100 px-2 py-1 font-bold text-slate-700">
+                                                        {result.kind === 'signed' ? 'ملف موقّع رقميًا · تم الاحتفاظ بالأصل' : 'الحجم لم يقل · تم الاحتفاظ بالأصل'}
+                                                    </span>
+                                                )}
                                             </div>
-                                        </div>
+                                        )}
                                     </div>
 
-                                    {/* Individual Download Action Button */}
-                                    <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-                                        <button
-                                            onClick={() => handleDownloadIndividual(res)}
-                                            className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all duration-200 ${
-                                                isDownloaded
-                                                    ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
-                                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20'
-                                            }`}
-                                        >
-                                            <ArrowDownTrayIcon className="w-4 h-4" />
-                                            <span>{isDownloaded ? 'تم التنزيل (إعادة التحميل)' : 'تحميل هذا الملف'}</span>
-                                        </button>
-                                    </div>
+                                    {result.kind !== 'failed' && (
+                                        <div className="flex flex-wrap gap-2 text-sm">
+                                            <button type="button" aria-expanded={previewId === result.id} onClick={() => setPreviewId(previewId === result.id ? null : result.id)} className="rounded-xl border border-slate-200 px-3 py-2 font-bold text-slate-700 hover:bg-slate-50">
+                                                {previewId === result.id ? 'إغلاق المعاينة' : 'معاينة'}
+                                            </button>
+                                            <button type="button" onClick={() => handleDownloadIndividual(result)} className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 font-bold text-white hover:bg-emerald-800">
+                                                <ArrowDownTrayIcon className="h-4 w-4" />
+                                                {downloadedIds.has(result.id) ? 'إعادة التحميل' : result.kind === 'compressed' ? 'تحميل النسخة المضغوطة' : 'تحميل الأصل'}
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
-                            );
-                        })}
+                                {previewId === result.id && result.kind !== 'failed' && <CompressionPreview source={result.source} file={result.file} pages={result.pages} />}
+                            </div>
+                        ))}
                     </div>
 
-                    {/* Bottom Actions */}
-                    <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-6 border-t border-slate-100">
-                        <button
-                            onClick={handleDownloadAllZip}
-                            disabled={isZipping}
-                            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-sm shadow-md shadow-emerald-500/25 transition-all cursor-pointer disabled:opacity-60"
-                        >
-                            <ArrowDownTrayIcon className="w-4 h-4" />
-                            <span>{isZipping ? 'جاري تجهيز ZIP...' : 'تحميل جميع الملفات المضغوطة (ZIP)'}</span>
+                    <div className="flex flex-wrap justify-center gap-3 pt-2">
+                        <button type="button" disabled={isZipping} onClick={() => { setResults([]); setPreviewId(null); setError(null); }} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                            تعديل القائمة أو مستوى الضغط
                         </button>
-
-                        <button
-                            onClick={() => {
-                                setFiles([]);
-                                setResults([]);
-                                setDownloadedIds(new Set());
-                                setError(null);
-                            }}
-                            className="w-full sm:w-auto bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 px-8 rounded-2xl border border-slate-200 transition-all text-sm"
-                        >
+                        <button type="button" disabled={isZipping} onClick={() => { setFiles([]); setResults([]); setPreviewId(null); setError(null); }} className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
                             ضغط ملفات PDF جديدة
                         </button>
                     </div>
