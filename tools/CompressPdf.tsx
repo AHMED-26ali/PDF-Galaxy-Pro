@@ -79,6 +79,11 @@ const CompressPdf: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [compressionLevel, setCompressionLevel] = useState<CompressionLevel>('medium');
     const [preserveResolution, setPreserveResolution] = useState(true);
+    const [targetChoice, setTargetChoice] = useState('auto');
+    const [customTargetKb, setCustomTargetKb] = useState('900');
+    const targetKb = targetChoice === 'custom' ? Number(customTargetKb) : Number(targetChoice);
+    const targetBytes = targetChoice !== 'auto' && Number.isFinite(targetKb) && targetKb >= 50 && targetKb <= 102400
+        ? Math.round(targetKb * 1024) : undefined;
     const [results, setResults] = useState<BatchResult[]>([]);
     const [downloadedIds, setDownloadedIds] = useState<Set<number>>(new Set());
     const [isZipping, setIsZipping] = useState(false);
@@ -104,7 +109,7 @@ const CompressPdf: React.FC = () => {
     };
 
     const handleBatchCompression = async () => {
-        if (files.length === 0 || isLoading) return;
+        if (files.length === 0 || isLoading || (targetChoice !== 'auto' && !targetBytes)) return;
         setIsLoading(true);
         setError(null);
         setResults([]);
@@ -120,7 +125,7 @@ const CompressPdf: React.FC = () => {
                     setProgressPercent(Math.round(((index + fraction) / files.length) * 100));
                 };
                 try {
-                    const result = await compressDocument(file, compressionLevel, onProgress, preserveResolution);
+                    const result = await compressDocument(file, compressionLevel, onProgress, preserveResolution, targetBytes);
                     newResults.push({ id: index, source: file, ...result });
                 } catch (error) {
                     newResults.push({ id: index, source: file, kind: 'failed', message: compressionError(error) });
@@ -293,13 +298,44 @@ const CompressPdf: React.FC = () => {
                         </p>
                     </div>
 
+                    <div className="mx-auto max-w-lg space-y-3 rounded-3xl border border-blue-200 bg-white p-5">
+                        <div className="text-right">
+                            <h4 className="text-base font-black text-slate-900">اختيار حجم ملف PDF المطلوب</h4>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                                حدّد أقصى حجم لكل ملف. الأداة تجرب مستويات ضغط متدرجة للحصول على أصغر نسخة سليمة، مع تثبيت مقاس الصفحات الأصلي.
+                            </p>
+                        </div>
+                        <select aria-label="الحجم المستهدف لكل ملف" value={targetChoice}
+                            onChange={event => setTargetChoice(event.target.value)}
+                            className="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm font-bold text-slate-800">
+                            <option value="auto">ضغط عادي — بدون حجم مستهدف</option>
+                            <option value="500">500 KB لكل ملف</option>
+                            <option value="700">700 KB لكل ملف</option>
+                            <option value="900">900 KB لكل ملف</option>
+                            <option value="1024">1 MB لكل ملف</option>
+                            <option value="2048">2 MB لكل ملف</option>
+                            <option value="custom">تحديد حجم مختلف بالكيلوبايت</option>
+                        </select>
+                        {targetChoice === 'custom' && <label className="block space-y-1 text-right text-xs font-bold text-slate-700">
+                            الحجم المطلوب (KB)
+                            <input type="number" min="50" max="102400" step="1"
+                                aria-label="حجم PDF المستهدف بالكيلوبايت"
+                                value={customTargetKb} onChange={event => setCustomTargetKb(event.target.value)}
+                                className="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm" />
+                        </label>}
+                        {targetChoice !== 'auto' && <p className="text-xs leading-relaxed text-amber-800">
+                            الحجم المستهدف هدف وليس ضمانًا. لو المستند مصوّرًا بالكامل، يمكن تقليل دقة صوره للوصول لحجم أصغر مع الحفاظ على أبعاد صفحات PDF. راجع وضوح الكتابة والأختام من «معاينة» قبل الرفع.
+                        </p>}
+                    </div>
+
                     <label className="mx-auto flex max-w-lg cursor-pointer items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
-                        <input type="checkbox" checked={preserveResolution} onChange={event => setPreserveResolution(event.currentTarget.checked)}
+                        <input type="checkbox" checked={preserveResolution && targetChoice === 'auto'} disabled={targetChoice !== 'auto'}
+                            onChange={event => setPreserveResolution(event.currentTarget.checked)}
                             className="mt-1 h-4 w-4 accent-blue-600" />
                         <span className="text-right text-sm text-slate-700">
                             <strong className="block text-slate-900">الحفاظ على دقة صور الملف الأصلية (موصى به للرفع إلى المواقع الأخرى)</strong>
                             <span className="mt-1 block text-xs leading-relaxed text-slate-600">
-                                تظل أبعاد الصفحات ودقة صور المستند كما هي، ويُقلّل حجم الملف بتحسين الصور. إلغاء الاختيار يتيح تصغير دقة الصور للحصول على ضغط أقوى، وقد لا يلائم المواقع التي تشترط دقة محددة.
+                                تظل أبعاد صفحات PDF ثابتة دائمًا. في الضغط العادي يمكن حفظ دقة صور السكان الأصلية؛ اختيار حجم مستهدف يستخدم ضغطًا تكيفيًا وقد يخفض دقة الصور لتقليل الحجم.
                             </span>
                         </span>
                     </label>
@@ -312,7 +348,8 @@ const CompressPdf: React.FC = () => {
                         >
                             إلغاء وتفريغ القائمة
                         </button>
-                        <button 
+                        <button
+                            disabled={targetChoice !== 'auto' && !targetBytes}
                             onClick={handleBatchCompression}
                             className="w-full sm:w-auto bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-extrabold py-3.5 px-10 rounded-2xl hover:from-blue-700 hover:to-indigo-700 shadow-lg shadow-blue-500/25 transition-all text-base flex items-center justify-center gap-2"
                         >
@@ -328,7 +365,7 @@ const CompressPdf: React.FC = () => {
                     <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5">
                         <div role="status">
                             <h3 className="text-lg font-black text-slate-900">نتائج ضغط الملفات</h3>
-                            <p className="mt-1 text-xs text-slate-600">مستوى الضغط · {compressionLabels[compressionLevel]} · {preserveResolution ? 'الحفاظ على دقة الصور' : 'تصغير دقة الصور'}</p>
+                            <p className="mt-1 text-xs text-slate-600">{targetBytes ? `الحجم المطلوب لكل ملف: ${targetKb} KB · تثبيت مقاس صفحة PDF` : `مستوى الضغط · ${compressionLabels[compressionLevel]} · ${preserveResolution ? 'الحفاظ على دقة الصور' : 'تصغير دقة الصور'}`}</p>
                             <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-slate-700">
                                 {compressedCount > 0 && <span>تم ضغط {compressedCount}</span>}
                                 {keptCount > 0 && <span>النسخة الأصلية {keptCount}</span>}
@@ -356,6 +393,9 @@ const CompressPdf: React.FC = () => {
                                             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                                                 <span>قبل <b dir="ltr">{formatBytes(result.source.size)}</b></span>
                                                 <span>بعد <b dir="ltr">{formatBytes(result.file.size)}</b></span>
+                                                {targetBytes && <span className={result.targetReached ? 'rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-800' : 'rounded-full bg-amber-50 px-2 py-1 font-bold text-amber-800'}>
+                                                    {result.targetReached ? 'تم تحقيق الحجم المطلوب' : 'لم يصل للحجم المطلوب · أفضل نتيجة متاحة'}
+                                                </span>}
                                                 {result.kind === 'compressed' ? (
                                                     <span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-800">توفير <b dir="ltr">{new Intl.NumberFormat('ar', { style: 'percent', maximumFractionDigits: 2 }).format((result.source.size - result.file.size) / result.source.size)}</b></span>
                                                 ) : (
