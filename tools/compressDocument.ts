@@ -1,5 +1,5 @@
 import { decodePDFRawStream, EncryptedPDFError, PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
-import { canvasToBlob, clearCanvas } from './pdfRuntime';
+import { canvasToBlob, clearCanvas, openPdf } from './pdfRuntime';
 
 const profiles = {
     low: { quality: 0.90, maxSide: 3200, optimizeMoreFormats: false },
@@ -161,6 +161,124 @@ async function recompressImage(stream: PDFRawStream, profile: typeof profiles.me
     }
 }
 
+
+/**
+ * Some phone scanners use indexed, CMYK, JPEG2000 or other embedded image encodings
+ * that the selective image optimizer cannot safely rewrite. A scan-only fallback
+ * can re-encode the visible page as JPEG without changing its physical page size.
+ * Never flatten a searchable PDF, digitally signed document, or a form.
+ */
+async function compressScannedPages(
+    sourceBytes: Uint8Array,
+    original: PDFDocument,
+    level: CompressionLevel,
+    onProgress: (fraction: number) => void,
+): Promise<Uint8Array | undefined> {
+    if (original.catalog.has(PDFName.of('AcroForm'))) return;
+    const pages = original.getPages();
+    if (pages.length < 1 || pages.length > 100) return;
+    const pdf = await openPdf(sourceBytes);
+    const settings = {
+        low: { maxSide: 1650, quality: 0.80 },
+        medium: { maxSide: 1200, quality: 0.56 },
+        high: { maxSide: 980, quality: 0.38 },
+    }[level];
+
+    try {
+        if (pdf.numPages !== pages.length) return;
+        const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        const imageOps = new Set([
+            pdfjs.OPS.paintImageXObject,
+            pdfjs.OPS.paintImageXObjectRepeat,
+            pdfjs.OPS.paintInlineImageXObject,
+            pdfjs.OPS.paintInlineImageXObjectGroup,
+            pdfjs.OPS.paintJpegXObject,
+        ].filter((code): code is number => typeof code === 'number'));
+
+        // Check *all* pages before rebuilding anything. Preserve native text,
+        // annotations, custom page boxes and atypical user units unchanged.
+        for (let number = 1; number <= pdf.numPages; number++) {
+            const sourcePage = pages[number - 1];
+            const media = sourcePage.getMediaBox();
+            const crop = sourcePage.getCropBox();
+            if (media.x !== 0 || media.y !== 0 || crop.x !== 0 || crop.y !== 0 ||
+                Math.abs(media.width - crop.width) > 0.01 ||
+                Math.abs(media.height - crop.height) > 0.01) return;
+            const page = await pdf.getPage(number);
+            if (page.userUnit !== 1) return;
+            const [text, annotations, operators] = await Promise.all([
+                page.getTextContent(),
+                page.getAnnotations({ intent: 'display' }),
+                page.getOperatorList(),
+            ]);
+            if (annotations.length > 0 ||
+                text.items.some(item => 'str' in item && item.str.trim() !== '') ||
+                !operators.fnArray.some(code => imageOps.has(code))) return;
+        }
+
+        const output = await PDFDocument.create();
+        const canvas = document.createElement('canvas');
+        try {
+            for (let number = 1; number <= pdf.numPages; number++) {
+                const page = await pdf.getPage(number);
+                const originalPage = pages[number - 1];
+                // Render without inherent page rotation, then restore the
+                // original /Rotate on the newly constructed PDF page.
+                const base = page.getViewport({ scale: 1, rotation: 0 });
+                const scale = Math.min(2, settings.maxSide / Math.max(base.width, base.height));
+                if (!Number.isFinite(scale) || scale <= 0) return;
+                const viewport = page.getViewport({ scale, rotation: 0 });
+                canvas.width = Math.max(1, Math.round(viewport.width));
+                canvas.height = Math.max(1, Math.round(viewport.height));
+                const context = canvas.getContext('2d', { alpha: false });
+                if (!context) return;
+                await page.render({ canvasContext: context, viewport, background: '#ffffff' }).promise;
+                const jpg = await canvasToBlob(canvas, 'image/jpeg', settings.quality);
+                const embedded = await output.embedJpg(new Uint8Array(await jpg.arrayBuffer()));
+                const newPage = output.addPage([originalPage.getWidth(), originalPage.getHeight()]);
+                newPage.setRotation(originalPage.getRotation());
+                newPage.drawImage(embedded, {
+                    x: 0, y: 0, width: originalPage.getWidth(), height: originalPage.getHeight(),
+                });
+                onProgress(number / pdf.numPages);
+                page.cleanup();
+            }
+            const bytes = await output.save({ useObjectStreams: false, addDefaultPage: false });
+            return await equivalentScanGeometry(sourceBytes, bytes) ? bytes : undefined;
+        } finally {
+            clearCanvas(canvas);
+        }
+    } catch {
+        // Leave the input untouched if scanning, decoding or rebuilding fails.
+        return;
+    } finally {
+        await pdf.destroy().catch(() => {});
+    }
+}
+
+/** Verify physical page boxes and rotations before offering rebuilt scan PDFs. */
+async function equivalentScanGeometry(before: Uint8Array, after: Uint8Array) {
+    let a: Awaited<ReturnType<typeof openPdf>> | undefined;
+    let b: Awaited<ReturnType<typeof openPdf>> | undefined;
+    try {
+        [a, b] = await Promise.all([openPdf(before), openPdf(after)]);
+        if (a.numPages !== b.numPages) return false;
+        for (let number = 1; number <= a.numPages; number++) {
+            const [oldPage, newPage] = await Promise.all([a.getPage(number), b.getPage(number)]);
+            if (oldPage.rotate !== newPage.rotate || oldPage.userUnit !== newPage.userUnit ||
+                oldPage.view.length !== newPage.view.length ||
+                oldPage.view.some((value, i) => Math.abs(value - newPage.view[i]) > 0.02)) return false;
+            await newPage.getOperatorList();
+        }
+        return true;
+    } catch {
+        return false;
+    } finally {
+        if (a) await a.destroy().catch(() => {});
+        if (b) await b.destroy().catch(() => {});
+    }
+}
+
 export async function compressDocument(input: File, level: CompressionLevel, onProgress: (fraction: number) => void) {
     const doc = await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false });
     const pages = doc.getPageCount();
@@ -188,9 +306,20 @@ export async function compressDocument(input: File, level: CompressionLevel, onP
         onProgress((index + 1) / (images.length + 1));
     }
     const bytes = await doc.save({ addDefaultPage: false, updateFieldAppearances: false, useObjectStreams: true });
-    if (bytes.byteLength >= input.size) return { file: input, pages, kind: 'original' as const };
+    let best: Uint8Array | undefined = bytes.byteLength < input.size ? bytes : undefined;
+
+    // Scan-only fallback also works for image encodings the selective optimizer
+    // does not support. Choose the smaller valid result, never a larger PDF.
+    const scanned = await compressScannedPages(
+        new Uint8Array(await input.arrayBuffer()),
+        await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false }),
+        level,
+        onProgress,
+    );
+    if (scanned && scanned.byteLength < (best?.byteLength ?? input.size)) best = scanned;
+    if (!best) return { file: input, pages, kind: 'original' as const };
     return {
-        file: new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }),
+        file: new Blob([new Uint8Array(best)], { type: 'application/pdf' }),
         pages,
         kind: 'compressed' as const,
     };
