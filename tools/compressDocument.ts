@@ -174,6 +174,7 @@ async function compressScannedPages(
     level: CompressionLevel,
     onProgress: (fraction: number) => void,
 ): Promise<Uint8Array | undefined> {
+    // Interactive forms would be lost by rasterization. Keep these documents untouched.
     if (original.catalog.has(PDFName.of('AcroForm'))) return;
     const pages = original.getPages();
     if (pages.length < 1 || pages.length > 100) return;
@@ -186,22 +187,9 @@ async function compressScannedPages(
 
     try {
         if (pdf.numPages !== pages.length) return;
-        // Eligibility: image-heavy source (checked by caller), standard page boxes,
-        // and no interactive annotations. A hidden OCR layer is common on scans;
-        // it must not silently disable all compression for those documents.
-        for (let number = 1; number <= pdf.numPages; number++) {
-            const sourcePage = pages[number - 1];
-            const media = sourcePage.getMediaBox();
-            const crop = sourcePage.getCropBox();
-            if (Math.abs(media.x) > 0.01 || Math.abs(media.y) > 0.01 ||
-                Math.abs(crop.x) > 0.01 || Math.abs(crop.y) > 0.01 ||
-                Math.abs(media.width - crop.width) > 0.01 ||
-                Math.abs(media.height - crop.height) > 0.01) return;
-            const page = await pdf.getPage(number);
-            if (page.userUnit !== 1) return;
-            if ((await page.getAnnotations({ intent: 'display' })).length > 0) return;
-        }
-
+        // Do not reject ordinary scanned documents just because their PDF pages
+        // contain a nonzero CropBox, OCR overlay or scanner-generated annotations.
+        // Preserve their visible appearance and original page geometry below.
         const output = await PDFDocument.create();
         const canvas = document.createElement('canvas');
         try {
@@ -221,10 +209,17 @@ async function compressScannedPages(
                 await page.render({ canvasContext: context, viewport, background: '#ffffff' }).promise;
                 const jpg = await canvasToBlob(canvas, 'image/jpeg', settings.quality);
                 const embedded = await output.embedJpg(new Uint8Array(await jpg.arrayBuffer()));
-                const newPage = output.addPage([originalPage.getWidth(), originalPage.getHeight()]);
+                const media = originalPage.getMediaBox();
+                const crop = originalPage.getCropBox();
+                const newPage = output.addPage([media.width, media.height]);
+                newPage.setMediaBox(media.x, media.y, media.width, media.height);
+                newPage.setCropBox(crop.x, crop.y, crop.width, crop.height);
                 newPage.setRotation(originalPage.getRotation());
+                // PDF.js renders the page's visible CropBox with rotation zero.
+                // Place it at the original CropBox coordinates so the view and
+                // printed page geometry stay unchanged even for offset boxes.
                 newPage.drawImage(embedded, {
-                    x: 0, y: 0, width: originalPage.getWidth(), height: originalPage.getHeight(),
+                    x: crop.x, y: crop.y, width: crop.width, height: crop.height,
                 });
                 onProgress(number / pdf.numPages);
                 page.cleanup();
@@ -300,10 +295,11 @@ export async function compressDocument(input: File, level: CompressionLevel, onP
     // often contain a hidden selectable text layer but are still photo scans.
     const rasterWeight = images.reduce((sum, [, stream]) => sum + stream.contents.length, 0);
     let rasterized = false;
-    // For image-dominant scans, prefer the smaller page render. Also allow
-    // fallback when the native optimizer produces no reduction at all, matching
-    // the original page-to-image compression behavior of PDFix.
-    if (input.size >= 100 * 1024 && (rasterWeight >= input.size * 0.22 || !best)) {
+    // Every level gets a real page-to-JPEG candidate when native image-stream
+    // compression is ineffective. Previous guards caused "0 Bytes" on normal
+    // camera scans with crop offsets or OCR layers. Always compare both results
+    // and keep the smallest; page-to-JPEG may flatten a searchable text layer.
+    if (input.size >= 30 * 1024 && (images.length > 0 || !best || rasterWeight > 0)) {
         const scanned = await compressScannedPages(
             new Uint8Array(await input.arrayBuffer()),
             await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false }),
