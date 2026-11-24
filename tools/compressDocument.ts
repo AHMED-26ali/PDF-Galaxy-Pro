@@ -1,5 +1,5 @@
 import { decodePDFRawStream, EncryptedPDFError, PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
-import { canvasToBlob, clearCanvas } from './pdfRuntime';
+import { canvasToBlob, clearCanvas, openPdf } from './pdfRuntime';
 
 const profiles = {
     low: { quality: 0.90, maxSide: 3200, optimizeMoreFormats: false },
@@ -110,7 +110,7 @@ async function readFlateImage(stream: PDFRawStream, width: number, height: numbe
     return image;
 }
 
-async function recompressImage(stream: PDFRawStream, profile: typeof profiles.medium, canvas: HTMLCanvasElement, allowGray: boolean) {
+async function recompressImage(stream: PDFRawStream, profile: typeof profiles.medium, canvas: HTMLCanvasElement, allowGray: boolean, preserveResolution: boolean) {
     const dict = stream.dict;
     const color = dict.lookup(colorSpace);
     if (color !== deviceRgb && !(profile.optimizeMoreFormats && allowGray && color === deviceGray)) return;
@@ -139,7 +139,8 @@ async function recompressImage(stream: PDFRawStream, profile: typeof profiles.me
 
     try {
         if (bitmap.width !== width || bitmap.height !== height) return;
-        const scale = Math.min(1, profile.maxSide / Math.max(width, height));
+        // Keep the original raster pixel dimensions when the document will be uploaded to other services.
+        const scale = preserveResolution ? 1 : Math.min(1, profile.maxSide / Math.max(width, height));
         canvas.width = Math.max(1, Math.round(width * scale));
         canvas.height = Math.max(1, Math.round(height * scale));
         const context = canvas.getContext('2d', { alpha: false });
@@ -161,8 +162,51 @@ async function recompressImage(stream: PDFRawStream, profile: typeof profiles.me
     }
 }
 
-export async function compressDocument(input: File, level: CompressionLevel, onProgress: (fraction: number) => void) {
-    const doc = await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false });
+/**
+ * Independently check a smaller PDF with the same viewer used by the preview tool.
+ * Both page geometry and searchable text must survive the conversion. On any
+ * unexpected change, never hand the transformed file to the user.
+ */
+async function isUploadCompatible(before: Uint8Array, after: Uint8Array) {
+    let source: Awaited<ReturnType<typeof openPdf>> | undefined;
+    let output: Awaited<ReturnType<typeof openPdf>> | undefined;
+    try {
+        source = await openPdf(before);
+        output = await openPdf(after);
+        if (source.numPages !== output.numPages) return false;
+        for (let i = 1; i <= source.numPages; i++) {
+            const [a, b] = await Promise.all([source.getPage(i), output.getPage(i)]);
+            try {
+                if (a.rotate !== b.rotate || Math.abs(a.userUnit - b.userUnit) > 0.0001 ||
+                    a.view.length !== b.view.length || a.view.some((value, n) => Math.abs(value - b.view[n]) > 0.02)) {
+                    return false;
+                }
+                const [originalText, compressedText] = await Promise.all([a.getTextContent(), b.getTextContent()]);
+                const textOf = (items: typeof originalText.items) => items.filter(item => 'str' in item)
+                    .map(item => 'str' in item ? item.str : '').join('');
+                if (textOf(originalText.items) !== textOf(compressedText.items)) return false;
+                // Parse the compressed page's drawing operations before offering it for download.
+                await b.getOperatorList();
+            } finally {
+                a.cleanup();
+                b.cleanup();
+            }
+        }
+        return true;
+    } catch {
+        return false;
+    } finally {
+        if (output) await output.destroy().catch(() => {});
+        if (source) await source.destroy().catch(() => {});
+    }
+}
+
+export async function compressDocument(
+    input: File, level: CompressionLevel, onProgress: (fraction: number) => void,
+    preserveResolution = true,
+) {
+    const originalBytes = new Uint8Array(await input.arrayBuffer());
+    const doc = await PDFDocument.load(originalBytes, { updateMetadata: false });
     const pages = doc.getPageCount();
     if (pages < 1) throw new Error('PDF contains no pages');
     const objects = doc.context.enumerateIndirectObjects();
@@ -179,7 +223,7 @@ export async function compressDocument(input: File, level: CompressionLevel, onP
     for (const [index, [ref, image]] of images.entries()) {
         if (!maskImages.has(image)) {
             try {
-                const optimized = await recompressImage(image, profiles[level], canvas, allowGray);
+                const optimized = await recompressImage(image, profiles[level], canvas, allowGray, preserveResolution);
                 if (optimized) doc.context.assign(ref, optimized);
             } catch {
                 // Keep unsupported or unreadable images in their original streams.
@@ -187,8 +231,12 @@ export async function compressDocument(input: File, level: CompressionLevel, onP
         }
         onProgress((index + 1) / (images.length + 1));
     }
-    const bytes = await doc.save({ addDefaultPage: false, updateFieldAppearances: false, useObjectStreams: true });
+    // Classic cross-reference tables are more broadly supported by older document portals.
+    const bytes = await doc.save({ addDefaultPage: false, updateFieldAppearances: false, useObjectStreams: false });
     if (bytes.byteLength >= input.size) return { file: input, pages, kind: 'original' as const };
+    if (!await isUploadCompatible(originalBytes, bytes)) {
+        return { file: input, pages, kind: 'incompatible' as const };
+    }
     return {
         file: new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }),
         pages,

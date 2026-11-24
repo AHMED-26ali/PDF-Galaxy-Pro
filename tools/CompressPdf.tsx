@@ -78,6 +78,7 @@ const CompressPdf: React.FC = () => {
     const [progressPercent, setProgressPercent] = useState<number>(0);
     const [error, setError] = useState<string | null>(null);
     const [compressionLevel, setCompressionLevel] = useState<CompressionLevel>('medium');
+    const [preserveResolution, setPreserveResolution] = useState(true);
     const [results, setResults] = useState<BatchResult[]>([]);
     const [downloadedIds, setDownloadedIds] = useState<Set<number>>(new Set());
     const [isZipping, setIsZipping] = useState(false);
@@ -119,7 +120,7 @@ const CompressPdf: React.FC = () => {
                     setProgressPercent(Math.round(((index + fraction) / files.length) * 100));
                 };
                 try {
-                    const result = await compressDocument(file, compressionLevel, onProgress);
+                    const result = await compressDocument(file, compressionLevel, onProgress, preserveResolution);
                     newResults.push({ id: index, source: file, ...result });
                 } catch (error) {
                     newResults.push({ id: index, source: file, kind: 'failed', message: compressionError(error) });
@@ -292,6 +293,17 @@ const CompressPdf: React.FC = () => {
                         </p>
                     </div>
 
+                    <label className="mx-auto flex max-w-lg cursor-pointer items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                        <input type="checkbox" checked={preserveResolution} onChange={event => setPreserveResolution(event.currentTarget.checked)}
+                            className="mt-1 h-4 w-4 accent-blue-600" />
+                        <span className="text-right text-sm text-slate-700">
+                            <strong className="block text-slate-900">الحفاظ على دقة صور الملف الأصلية (موصى به للرفع إلى المواقع الأخرى)</strong>
+                            <span className="mt-1 block text-xs leading-relaxed text-slate-600">
+                                تظل أبعاد الصفحات ودقة صور المستند كما هي، ويُقلّل حجم الملف بتحسين الصور. إلغاء الاختيار يتيح تصغير دقة الصور للحصول على ضغط أقوى، وقد لا يلائم المواقع التي تشترط دقة محددة.
+                            </span>
+                        </span>
+                    </label>
+
                     {/* Action Buttons */}
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4 border-t border-slate-100">
                         <button
@@ -316,7 +328,7 @@ const CompressPdf: React.FC = () => {
                     <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5">
                         <div role="status">
                             <h3 className="text-lg font-black text-slate-900">نتائج ضغط الملفات</h3>
-                            <p className="mt-1 text-xs text-slate-600">مستوى الضغط · {compressionLabels[compressionLevel]}</p>
+                            <p className="mt-1 text-xs text-slate-600">مستوى الضغط · {compressionLabels[compressionLevel]} · {preserveResolution ? 'الحفاظ على دقة الصور' : 'تصغير دقة الصور'}</p>
                             <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-slate-700">
                                 {compressedCount > 0 && <span>تم ضغط {compressedCount}</span>}
                                 {keptCount > 0 && <span>النسخة الأصلية {keptCount}</span>}
@@ -348,7 +360,7 @@ const CompressPdf: React.FC = () => {
                                                     <span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-800">توفير <b dir="ltr">{new Intl.NumberFormat('ar', { style: 'percent', maximumFractionDigits: 2 }).format((result.source.size - result.file.size) / result.source.size)}</b></span>
                                                 ) : (
                                                     <span className="rounded-full bg-slate-100 px-2 py-1 font-bold text-slate-700">
-                                                        {result.kind === 'signed' ? 'ملف موقّع رقميًا · تم الاحتفاظ بالأصل' : 'الحجم لم يقل · تم الاحتفاظ بالأصل'}
+                                                        {result.kind === 'signed' ? 'ملف موقّع رقميًا · تم الاحتفاظ بالأصل' : result.kind === 'incompatible' ? 'لم يجتز الناتج فحص توافق الصفحات · تم الاحتفاظ بالأصل' : 'الحجم لم يقل · تم الاحتفاظ بالأصل'}
                                                     </span>
                                                 )}
                                             </div>
