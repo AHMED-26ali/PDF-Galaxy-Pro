@@ -300,7 +300,10 @@ export async function compressDocument(input: File, level: CompressionLevel, onP
     // often contain a hidden selectable text layer but are still photo scans.
     const rasterWeight = images.reduce((sum, [, stream]) => sum + stream.contents.length, 0);
     let rasterized = false;
-    if (input.size >= 100 * 1024 && rasterWeight >= input.size * 0.22) {
+    // For image-dominant scans, prefer the smaller page render. Also allow
+    // fallback when the native optimizer produces no reduction at all, matching
+    // the original page-to-image compression behavior of PDFix.
+    if (input.size >= 100 * 1024 && (rasterWeight >= input.size * 0.22 || !best)) {
         const scanned = await compressScannedPages(
             new Uint8Array(await input.arrayBuffer()),
             await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false }),
