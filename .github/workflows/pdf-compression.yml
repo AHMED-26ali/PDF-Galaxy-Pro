@@ -1,0 +1,29 @@
+name: PDF compression browser smoke test
+on:
+  push:
+    branches:
+      - fix/pdfix-reliable-three-level-compression
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/compressDocument.ts'
+      - 'tools/CompressPdf.tsx'
+      - 'scripts/compression-smoke.mjs'
+      - '.github/workflows/pdf-compression.yml'
+permissions:
+  contents: read
+jobs:
+  compression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install app dependencies and test browser
+        run: |
+          npm ci
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Build production bundle
+        run: npm run build
+      - name: Verify all three compression levels in browser
+        run: node scripts/compression-smoke.mjs
