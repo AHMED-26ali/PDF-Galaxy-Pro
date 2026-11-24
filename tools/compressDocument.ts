@@ -1,5 +1,5 @@
 import { decodePDFRawStream, EncryptedPDFError, PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
-import { canvasToBlob, clearCanvas, openPdf } from './pdfRuntime';
+import { canvasToBlob, clearCanvas } from './pdfRuntime';
 
 const profiles = {
     low: { quality: 0.90, maxSide: 3200, optimizeMoreFormats: false },
@@ -110,7 +110,7 @@ async function readFlateImage(stream: PDFRawStream, width: number, height: numbe
     return image;
 }
 
-async function recompressImage(stream: PDFRawStream, profile: typeof profiles.medium, canvas: HTMLCanvasElement, allowGray: boolean, preserveResolution: boolean) {
+async function recompressImage(stream: PDFRawStream, profile: typeof profiles.medium, canvas: HTMLCanvasElement, allowGray: boolean) {
     const dict = stream.dict;
     const color = dict.lookup(colorSpace);
     if (color !== deviceRgb && !(profile.optimizeMoreFormats && allowGray && color === deviceGray)) return;
@@ -139,8 +139,7 @@ async function recompressImage(stream: PDFRawStream, profile: typeof profiles.me
 
     try {
         if (bitmap.width !== width || bitmap.height !== height) return;
-        // Keep the original raster pixel dimensions when the document will be uploaded to other services.
-        const scale = preserveResolution ? 1 : Math.min(1, profile.maxSide / Math.max(width, height));
+        const scale = Math.min(1, profile.maxSide / Math.max(width, height));
         canvas.width = Math.max(1, Math.round(width * scale));
         canvas.height = Math.max(1, Math.round(height * scale));
         const context = canvas.getContext('2d', { alpha: false });
@@ -162,223 +161,38 @@ async function recompressImage(stream: PDFRawStream, profile: typeof profiles.me
     }
 }
 
-/**
- * Independently check a smaller PDF with the same viewer used by the preview tool.
- * Both page geometry and searchable text must survive the conversion. On any
- * unexpected change, never hand the transformed file to the user.
- */
-async function isUploadCompatible(before: Uint8Array, after: Uint8Array) {
-    let source: Awaited<ReturnType<typeof openPdf>> | undefined;
-    let output: Awaited<ReturnType<typeof openPdf>> | undefined;
-    try {
-        source = await openPdf(before);
-        output = await openPdf(after);
-        if (source.numPages !== output.numPages) return false;
-        for (let i = 1; i <= source.numPages; i++) {
-            const [a, b] = await Promise.all([source.getPage(i), output.getPage(i)]);
-            try {
-                if (a.rotate !== b.rotate || Math.abs(a.userUnit - b.userUnit) > 0.0001 ||
-                    a.view.length !== b.view.length || a.view.some((value, n) => Math.abs(value - b.view[n]) > 0.02)) {
-                    return false;
-                }
-                const [originalText, compressedText] = await Promise.all([a.getTextContent(), b.getTextContent()]);
-                const textOf = (items: typeof originalText.items) => items.filter(item => 'str' in item)
-                    .map(item => 'str' in item ? item.str : '').join('');
-                if (textOf(originalText.items) !== textOf(compressedText.items)) return false;
-                // Parse the compressed page's drawing operations before offering it for download.
-                await b.getOperatorList();
-            } finally {
-                a.cleanup();
-                b.cleanup();
-            }
-        }
-        return true;
-    } catch {
-        return false;
-    } finally {
-        if (output) await output.destroy().catch(() => {});
-        if (source) await source.destroy().catch(() => {});
-    }
-}
-
-type ImageProfile = typeof profiles.medium;
-
-/**
- * Re-encode eligible image XObjects without changing the page tree, geometry,
- * text, selectable layers or annotations. Starting from source bytes each time
- * prevents repeated lossy generations of already-compressed JPEG images.
- */
-async function encodeImageObjects(
-    input: Uint8Array,
-    profile: ImageProfile,
-    preserveResolution: boolean,
-    onProgress: (fraction: number) => void,
-): Promise<Uint8Array> {
-    const doc = await PDFDocument.load(input, { updateMetadata: false });
+export async function compressDocument(input: File, level: CompressionLevel, onProgress: (fraction: number) => void) {
+    const doc = await PDFDocument.load(await input.arrayBuffer(), { updateMetadata: false });
+    const pages = doc.getPageCount();
+    if (pages < 1) throw new Error('PDF contains no pages');
     const objects = doc.context.enumerateIndirectObjects();
+    const signed = doc.catalog.has(PDFName.of('Perms')) || objects.some(([, obj]) =>
+        obj instanceof PDFDict && obj.has(PDFName.of('ByteRange')) && obj.has(PDFName.of('Contents'))
+    );
+    if (signed) return { file: input, pages, kind: 'signed' as const };
+
     const images = objects.filter((entry): entry is [typeof entry[0], PDFRawStream] =>
         entry[1] instanceof PDFRawStream && entry[1].dict.get(subtype) === PDFName.of('Image'));
     const maskImages = new Set(images.flatMap(([, image]) => maskKeys.map(key => image.dict.lookup(key))));
     const allowGray = !doc.catalog.has(PDFName.of('OutputIntents'));
     const canvas = document.createElement('canvas');
-    try {
-        for (const [index, [ref, image]] of images.entries()) {
-            if (!maskImages.has(image)) {
-                try {
-                    const optimized = await recompressImage(image, profile, canvas, allowGray, preserveResolution);
-                    if (optimized) doc.context.assign(ref, optimized);
-                } catch {
-                    // Preserve an unsupported or damaged image instead of altering the document.
-                }
-            }
-            onProgress((index + 1) / (images.length + 1));
-        }
-    } finally {
-        clearCanvas(canvas);
-    }
-    const output = await doc.save({
-        addDefaultPage: false,
-        updateFieldAppearances: false,
-        useObjectStreams: false,
-    });
-    onProgress(1);
-    return output;
-}
-
-/**
- * Optional last resort only for a scan-only PDF (no selectable text,
- * annotations, or form fields): rebuild pages from their visible appearance.
- * This preserves the exact PDF page size, but raster resolution can decrease.
- * Never use this method for searchable/document-native PDFs.
- */
-async function encodeScanPages(
-    originalBytes: Uint8Array,
-    maxSide: number,
-    quality: number,
-    onProgress: (fraction: number) => void,
-): Promise<Uint8Array | undefined> {
-    const pdf = await openPdf(originalBytes);
-    try {
-        if (pdf.numPages < 1 || pdf.numPages > 80) return;
-        const original = await PDFDocument.load(originalBytes, { updateMetadata: false });
-        if (original.catalog.has(PDFName.of('AcroForm'))) return;
-        const originalPages = original.getPages();
-        // Do all eligibility checks before creating a single output page.
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const view = await pdf.getPage(i);
-            const media = originalPages[i - 1].getMediaBox();
-            const crop = originalPages[i - 1].getCropBox();
-            if (view.userUnit !== 1 || Math.abs(media.x) > 0.01 || Math.abs(media.y) > 0.01 ||
-                Math.abs(crop.x) > 0.01 || Math.abs(crop.y) > 0.01 ||
-                Math.abs(crop.width - media.width) > 0.01 ||
-                Math.abs(crop.height - media.height) > 0.01) return;
-            const [text, annotations] = await Promise.all([
-                view.getTextContent(),
-                view.getAnnotations({ intent: 'display' }),
-            ]);
-            if (annotations.length || text.items.some(item => 'str' in item && item.str.trim())) return;
-        }
-
-        const output = await PDFDocument.create();
-        const canvas = document.createElement('canvas');
-        try {
-            for (let i = 1; i <= pdf.numPages; i++) {
-                const pdfPage = await pdf.getPage(i);
-                const originalPage = originalPages[i - 1];
-                const base = pdfPage.getViewport({ scale: 1, rotation: 0 });
-                const scale = Math.min(2, maxSide / Math.max(base.width, base.height));
-                const viewport = pdfPage.getViewport({ scale, rotation: 0 });
-                canvas.width = Math.max(1, Math.round(viewport.width));
-                canvas.height = Math.max(1, Math.round(viewport.height));
-                const ctx = canvas.getContext('2d', { alpha: false });
-                if (!ctx) return;
-                await pdfPage.render({ canvasContext: ctx, viewport, background: '#ffffff' }).promise;
-                const compressed = await canvasToBlob(canvas, 'image/jpeg', quality);
-                const jpg = await output.embedJpg(new Uint8Array(await compressed.arrayBuffer()));
-                const newPage = output.addPage([originalPage.getWidth(), originalPage.getHeight()]);
-                newPage.setRotation(originalPage.getRotation());
-                newPage.drawImage(jpg, {
-                    x: 0, y: 0, width: originalPage.getWidth(), height: originalPage.getHeight(),
-                });
-                onProgress(i / pdf.numPages);
-            }
-            return output.save({ useObjectStreams: false, addDefaultPage: false });
-        } finally {
-            clearCanvas(canvas);
-        }
-    } catch {
-        // This optional fallback is skipped if PDF.js cannot fully render the scan.
-        return;
-    } finally {
-        await pdf.destroy().catch(() => {});
-    }
-}
-
-export async function compressDocument(
-    input: File, level: CompressionLevel, onProgress: (fraction: number) => void,
-    preserveResolution = true, targetBytes?: number,
-) {
-    const originalBytes = new Uint8Array(await input.arrayBuffer());
-    const source = await PDFDocument.load(originalBytes, { updateMetadata: false });
-    const pages = source.getPageCount();
-    if (pages < 1) throw new Error('PDF contains no pages');
-    const objects = source.context.enumerateIndirectObjects();
-    const signed = source.catalog.has(PDFName.of('Perms')) || objects.some(([, obj]) =>
-        obj instanceof PDFDict && obj.has(PDFName.of('ByteRange')) && obj.has(PDFName.of('Contents'))
-    );
-    if (signed) return { file: input, pages, kind: 'signed' as const, targetReached: false };
-
-    const desired = Number.isFinite(targetBytes) && (targetBytes ?? 0) >= 50 * 1024
-        ? Math.round(targetBytes!) : undefined;
-    const tries: ImageProfile[] = desired
-        ? [profiles[level], { quality: 0.38, maxSide: 1050, optimizeMoreFormats: true },
-            { quality: 0.27, maxSide: 850, optimizeMoreFormats: true },
-            { quality: 0.18, maxSide: 700, optimizeMoreFormats: true }]
-        : [profiles[level]];
-    let best: Uint8Array | undefined;
-    let bestSize = input.size;
-    const totalSteps = tries.length + (desired ? 4 : 0);
-
-    for (const [index, profile] of tries.entries()) {
-        const bytes = await encodeImageObjects(originalBytes, profile,
-            desired ? false : preserveResolution, fraction => onProgress((index + fraction) / totalSteps));
-        if (bytes.length < bestSize && await isUploadCompatible(originalBytes, bytes)) {
-            best = bytes;
-            bestSize = bytes.length;
-            if (desired && bestSize <= desired) break;
-        }
-    }
-
-    // A photographed PDF sometimes contains unsupported image encodings. When
-    // a hard size limit was requested, offer scan-only recompression as a safe
-    // fallback, not as a replacement for PDF text or vector content.
-    if (desired && bestSize > desired) {
-        const scanTries = [
-            { maxSide: 1350, quality: 0.55 },
-            { maxSide: 1050, quality: 0.40 },
-            { maxSide: 850, quality: 0.30 },
-            { maxSide: 700, quality: 0.23 },
-        ];
-        for (const [index, profile] of scanTries.entries()) {
-            const candidate = await encodeScanPages(originalBytes, profile.maxSide, profile.quality,
-                fraction => onProgress((tries.length + index + fraction) / totalSteps));
-            if (!candidate) break;
-            if (candidate.length < bestSize && await isUploadCompatible(originalBytes, candidate)) {
-                best = candidate;
-                bestSize = candidate.length;
-                if (bestSize <= desired) break;
+    for (const [index, [ref, image]] of images.entries()) {
+        if (!maskImages.has(image)) {
+            try {
+                const optimized = await recompressImage(image, profiles[level], canvas, allowGray);
+                if (optimized) doc.context.assign(ref, optimized);
+            } catch {
+                // Keep unsupported or unreadable images in their original streams.
             }
         }
+        onProgress((index + 1) / (images.length + 1));
     }
-    onProgress(1);
-    if (!best) return {
-        file: input, pages, kind: 'original' as const, targetReached: desired ? input.size <= desired : undefined,
-    };
+    const bytes = await doc.save({ addDefaultPage: false, updateFieldAppearances: false, useObjectStreams: true });
+    if (bytes.byteLength >= input.size) return { file: input, pages, kind: 'original' as const };
     return {
-        file: new Blob([new Uint8Array(best)], { type: 'application/pdf' }),
+        file: new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }),
         pages,
         kind: 'compressed' as const,
-        targetReached: desired ? bestSize <= desired : undefined,
     };
 }
 
